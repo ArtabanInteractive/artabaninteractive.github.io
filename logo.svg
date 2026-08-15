@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"
+     role="img" aria-label="Artaban Interactive">
+  <title>Artaban Interactive</title>
+  <!-- A printer's roundel. Ferris wheel, because it is the one piece of midway
+       furniture the game never draws: no bottle, no booth, no chain, no ticket.
+       Four inks, same press. -->
+  <defs>
+    <path id="rim" d="M 16 100 A 84 84 0 0 1 184 100"/>
+  </defs>
+
+  <!-- paper -->
+  <circle cx="100" cy="100" r="96" fill="#EFE4CC"/>
+
+  <!-- rings -->
+  <circle cx="100" cy="100" r="96" fill="none" stroke="#2E241E" stroke-width="3.5"/>
+  <circle cx="100" cy="100" r="74" fill="none" stroke="#2E241E" stroke-width="1.1" opacity=".42"/>
+
+  <!-- studio name around the top of the band -->
+  <text font-family="Georgia, 'Times New Roman', serif" font-size="12"
+        letter-spacing="2.9" fill="#2E241E" text-anchor="middle">
+    <textPath href="#rim" startOffset="50%">ARTABAN INTERACTIVE</textPath>
+  </text>
+
+  <!-- ornament closing the band at the foot -->
+  <g stroke="#2E241E" stroke-width="1.6" opacity=".8">
+    <line x1="76" y1="184" x2="88" y2="184"/>
+    <line x1="112" y1="184" x2="124" y2="184"/>
+  </g>
+  <rect x="96.5" y="180.5" width="7" height="7" transform="rotate(45 100 184)" fill="#D6452F"/>
+
+  <!-- the wheel -->
+  <g stroke="#2E241E" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- ground -->
+    <line x1="68" y1="158" x2="132" y2="158" stroke-width="3"/>
+    <!-- A-frame -->
+    <path d="M100 94 L78 157 M100 94 L122 157" fill="none" stroke-width="3"/>
+    <path d="M85 138 L115 138" fill="none" stroke-width="2" opacity=".55"/>
+
+    <!-- rim -->
+    <circle cx="100" cy="94" r="44" fill="none" stroke="#D6452F" stroke-width="4"/>
+    <circle cx="100" cy="94" r="44" fill="none" stroke-width="1.1" opacity=".5"/>
+
+    <!-- spokes -->
+    <g stroke="#D6452F" stroke-width="2">
+      <path d="M100 94L100.0 50.0"/><path d="M100 94L131.1 62.9"/>
+      <path d="M100 94L144.0 94.0"/><path d="M100 94L131.1 125.1"/>
+      <path d="M100 94L100.0 138.0"/><path d="M100 94L68.9 125.1"/>
+      <path d="M100 94L56.0 94.0"/><path d="M100 94L68.9 62.9"/>
+    </g>
+
+    <!-- bulbs between the spokes -->
+    <g fill="#E9A72B" stroke-width="1.1">
+      <circle cx="116.8" cy="53.3" r="3.1"/><circle cx="140.7" cy="77.2" r="3.1"/>
+      <circle cx="140.7" cy="110.8" r="3.1"/><circle cx="116.8" cy="134.7" r="3.1"/>
+      <circle cx="83.2" cy="134.7" r="3.1"/><circle cx="59.3" cy="110.8" r="3.1"/>
+      <circle cx="59.3" cy="77.2" r="3.1"/><circle cx="83.2" cy="53.3" r="3.1"/>
+    </g>
+
+    <!-- cabins, hanging plumb -->
+    <g fill="#1E6E6A" stroke-width="1.6">
+      <path d="M95.6 53 h8.8 l-1.2 7.4 h-6.4 z"/>
+      <path d="M126.7 65.9 h8.8 l-1.2 7.4 h-6.4 z"/>
+      <path d="M139.6 97 h8.8 l-1.2 7.4 h-6.4 z"/>
+      <path d="M126.7 128.1 h8.8 l-1.2 7.4 h-6.4 z"/>
+      <path d="M95.6 141 h8.8 l-1.2 7.4 h-6.4 z"/>
+      <path d="M64.5 128.1 h8.8 l-1.2 7.4 h-6.4 z"/>
+      <path d="M51.6 97 h8.8 l-1.2 7.4 h-6.4 z"/>
+      <path d="M64.5 65.9 h8.8 l-1.2 7.4 h-6.4 z"/>
+    </g>
+
+    <!-- hub -->
+    <circle cx="100" cy="94" r="6.2" fill="#E9A72B" stroke-width="2.4"/>
+    <circle cx="100" cy="94" r="1.9" fill="#2E241E" stroke="none"/>
+  </g>
+</svg>

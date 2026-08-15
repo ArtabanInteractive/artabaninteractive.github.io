@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artaban Interactive</title>
+<meta name="description" content="Artaban Interactive is a small independent game studio. Currently making Artaban, a carnival physics game for Android.">
+<meta property="og:title" content="Artaban Interactive">
+<meta property="og:description" content="A small independent game studio. Currently making Artaban, a carnival physics game.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="shots/title.png">
+<link rel="icon" href="mark.svg">
+<style>
+  /* The booth's four inks on its own paper. One deliberate look — this page is
+     the same object as the game, so it does not follow the viewer's theme. */
+  :root{
+    --poppy:#D6452F; --chrome:#E9A72B; --teal:#1E6E6A;
+    --key:#2E241E;   --stock:#EFE4CC;  --hand:#4A5A5C;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    min-height:100vh;
+    background:
+      radial-gradient(120% 70% at 50% 22%, rgba(255,250,236,.55), rgba(96,78,50,.16)),
+      var(--stock);
+    color:var(--key);
+    font-family:Georgia,"Times New Roman",serif;
+    display:flex; flex-direction:column; align-items:center;
+    padding:34px 20px 30px;
+  }
+  main{width:100%; max-width:660px}
+
+  /* ---- mark + wordmark ---- */
+  header{text-align:center}
+  .mark{width:clamp(116px,26vw,150px); height:auto; display:block; margin:0 auto}
+  h1{
+    margin:20px 0 0; font-size:clamp(26px,7vw,42px); font-weight:700;
+    letter-spacing:.11em; line-height:1.1; color:var(--poppy);
+    text-shadow:2px 2px 0 rgba(46,36,30,.8);
+  }
+  .sub{margin:12px 0 0; font-size:clamp(9px,2.3vw,11px);
+       letter-spacing:.3em; color:var(--teal); text-transform:uppercase}
+  .lede{max-width:31em; margin:26px auto 0; text-align:center;
+        font-size:clamp(14.5px,3.4vw,16.5px); line-height:1.65}
+  /* the booth's own aside voice, borrowed for the byline */
+  .byline{margin:15px auto 0; text-align:center; font-style:italic;
+          font-size:13.5px; color:var(--hand)}
+
+  /* ---- section heads ---- */
+  .sect{width:100%; margin:44px 0 0; padding-bottom:5px;
+        border-bottom:1px solid rgba(46,36,30,.26);
+        font-size:9px; letter-spacing:.24em; color:var(--teal); text-transform:uppercase}
+
+  /* ---- the game ---- */
+  .row{display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-top:16px}
+  .name{font-size:22px; color:var(--key)}
+  .status{font-size:9.5px; letter-spacing:.16em; color:var(--poppy);
+          text-transform:uppercase; white-space:nowrap}
+  .note{margin:8px 0 0; font-size:14.5px; line-height:1.6; font-style:italic; color:var(--hand)}
+
+  /* ---- screenshots ---- */
+  .shots{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:22px}
+  .shots img{
+    width:100%; height:auto; display:block; border-radius:3px;
+    border:1.5px solid var(--key); background:var(--stock);
+    box-shadow:0 4px 14px rgba(80,62,36,.24);
+  }
+  @media (max-width:560px){ .shots{grid-template-columns:repeat(2,1fr); gap:10px} }
+
+  /* ---- video slot ---- */
+  .film{margin-top:22px; position:relative; width:100%; aspect-ratio:16/9;
+        border:1.5px solid var(--key); border-radius:3px; overflow:hidden;
+        background:rgba(46,36,30,.05)}
+  .film iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
+  .film .soon{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+              font-size:10px; letter-spacing:.24em; text-transform:uppercase;
+              color:rgba(46,36,30,.45)}
+
+  /* ---- footer ---- */
+  footer{margin-top:46px; text-align:center;
+         font-size:11.5px; letter-spacing:.04em; color:rgba(46,36,30,.72)}
+  footer a{color:var(--teal); text-decoration:none; border-bottom:1px solid rgba(30,110,106,.4)}
+  footer a:hover,footer a:focus{color:var(--poppy); border-bottom-color:var(--poppy)}
+  footer a:focus-visible{outline:2px solid var(--poppy); outline-offset:3px; border-radius:2px}
+  .colophon{margin-top:14px; font-size:9px; letter-spacing:.22em;
+            text-transform:uppercase; color:rgba(46,36,30,.5)}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img class="mark" src="logo.svg" alt="Artaban Interactive">
+    <h1>ARTABAN INTERACTIVE</h1>
+    <p class="sub">Small games, made carefully</p>
+  </header>
+
+  <p class="lede">
+    An independent studio of one. Everything here is drawn and sounded entirely
+    in code — no stock art, no sample libraries, nothing borrowed.
+  </p>
+  <p class="byline">Made by Ian Sage in Cootes Paradise</p>
+
+  <p class="sect">In development</p>
+  <div class="row">
+    <span class="name">Artaban</span>
+    <span class="status">Android &middot; in development</span>
+  </div>
+  <p class="note">
+    A carnival booth rigged by physics. Twenty-five challenges and one rule:
+    the ball only counts on the way back.
+  </p>
+
+  <div class="shots">
+    <img src="shots/title.png"  alt="Artaban title screen: a hand-painted carnival banner under string lights" loading="lazy" width="440" height="880">
+    <img src="shots/throw.png"  alt="Aiming the ball on its chain at the bottle" loading="lazy" width="440" height="880">
+    <img src="shots/win.png"    alt="The bottle knocked down on the return swing" loading="lazy" width="440" height="880">
+    <img src="shots/book.png"   alt="The book of tickets, one stub per challenge" loading="lazy" width="440" height="880">
+  </div>
+
+  <!-- TRAILER
+       When the video is on YouTube, delete this comment and paste the block
+       below back in, swapping VIDEO_ID for the id in the watch URL
+       (youtube.com/watch?v=VIDEO_ID). Left out until then on purpose: an
+       empty player is worse than no player.
+
+  <p class="sect">Trailer</p>
+  <div class="film">
+    <iframe src="https://www.youtube-nocookie.com/embed/VIDEO_ID"
+            title="Artaban trailer" loading="lazy" allowfullscreen
+            allow="accelerometer; clipboard-write; encrypted-media; picture-in-picture"></iframe>
+  </div>
+  -->
+
+  <footer>
+    <a href="mailto:artabangames@gmail.com">artabangames@gmail.com</a>
+    &nbsp;&middot;&nbsp;
+    <a href="/privacy-policy/">Privacy policy</a>
+    <div class="colophon">Artaban Interactive</div>
+  </footer>
+</main>
+</body>
+</html>
