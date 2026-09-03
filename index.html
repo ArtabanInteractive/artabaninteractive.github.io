@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Artaban Interactive</title>
-<meta name="description" content="Artaban Interactive is a small independent game studio. Currently making Artaban, a carnival physics game for Android.">
+<meta name="description" content="Artaban Interactive is a small independent game studio. Maker of Artaban, a carnival physics game — out now on Google Play.">
 <meta property="og:title" content="Artaban Interactive">
-<meta property="og:description" content="A small independent game studio. Currently making Artaban, a carnival physics game.">
+<meta property="og:description" content="A small independent game studio. Maker of Artaban, a carnival physics game — out now on Google Play.">
 <meta property="og:type" content="website">
 <meta property="og:image" content="shots/title.png">
 <link rel="icon" href="mark.svg">
@@ -59,6 +59,11 @@
           text-transform:uppercase; white-space:nowrap}
   .note{margin:8px 0 0; font-size:14.5px; line-height:1.6; font-style:italic; color:var(--hand)}
 
+  /* ---- the store badge ---- */
+  .get{margin:20px 0 0; text-align:center}
+  .get img{width:200px; height:auto; display:inline-block;
+           filter:drop-shadow(0 3px 8px rgba(80,62,36,.3))}
+
   /* ---- screenshots ---- */
   .shots{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:22px}
   .shots img{
@@ -101,36 +106,35 @@
   </p>
   <p class="byline">Made by Ian Sage in Cootes Paradise</p>
 
-  <p class="sect">In development</p>
+  <p class="sect">Now playing</p>
   <div class="row">
     <span class="name">Artaban</span>
-    <span class="status">Android &middot; in development</span>
+    <span class="status">Android &middot; out now</span>
   </div>
   <p class="note">
     A carnival booth rigged by physics. Twenty-five challenges and one rule:
     the ball only counts on the way back.
   </p>
 
-  <div class="shots">
-    <img src="shots/title.png"  alt="Artaban title screen: a hand-painted carnival banner under string lights" loading="lazy" width="440" height="880">
-    <img src="shots/throw.png"  alt="Aiming the ball on its chain at the bottle" loading="lazy" width="440" height="880">
-    <img src="shots/win.png"    alt="The bottle knocked down on the return swing" loading="lazy" width="440" height="880">
-    <img src="shots/book.png"   alt="The book of tickets, one stub per challenge" loading="lazy" width="440" height="880">
-  </div>
+  <p class="get">
+    <a href="https://play.google.com/store/apps/details?id=com.artaban.alibi">
+      <img src="google-play-badge.png" alt="Get it on Google Play" width="200" height="60">
+    </a>
+  </p>
 
-  <!-- TRAILER
-       When the video is on YouTube, delete this comment and paste the block
-       below back in, swapping VIDEO_ID for the id in the watch URL
-       (youtube.com/watch?v=VIDEO_ID). Left out until then on purpose: an
-       empty player is worse than no player.
+  <div class="shots">
+    <img src="shots/title.png"  alt="Artaban title screen: a hand-painted carnival banner under string lights" loading="lazy" width="440" height="978">
+    <img src="shots/throw.png"  alt="Challenge 1: pulling the ball back on its rope, the bottle waiting" loading="lazy" width="440" height="978">
+    <img src="shots/win.png"    alt="The bottle knocked down on the return swing — DOWN IT GOES!" loading="lazy" width="440" height="978">
+    <img src="shots/book.png"   alt="The book of tickets, one stub per challenge, punches earned" loading="lazy" width="440" height="978">
+  </div>
 
   <p class="sect">Trailer</p>
   <div class="film">
-    <iframe src="https://www.youtube-nocookie.com/embed/VIDEO_ID"
+    <iframe src="https://www.youtube-nocookie.com/embed/0TEEQcnTOIo"
             title="Artaban trailer" loading="lazy" allowfullscreen
             allow="accelerometer; clipboard-write; encrypted-media; picture-in-picture"></iframe>
   </div>
-  -->
 
   <footer>
     <a href="mailto:artabangames@gmail.com">artabangames@gmail.com</a>
