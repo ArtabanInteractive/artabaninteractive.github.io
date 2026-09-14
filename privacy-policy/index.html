@@ -9,7 +9,7 @@
 <link rel="icon" href="../mark.svg">
 <style>
   /* Same paper, same four inks as the front page. A legal page still gets the
-     house look —- it is the same object as the game. */
+     house look — it is the same object as the game. */
   :root{
     --poppy:#D6452F; --chrome:#E9A72B; --teal:#1E6E6A;
     --key:#2E241E;   --stock:#EFE4CC;  --hand:#4A5A5C;
@@ -59,28 +59,52 @@
   <header>
     <a href="../"><img class="mark" src="../mark.svg" alt="Artaban Interactive"></a>
     <h1>PRIVACY POLICY</h1>
-    <p class="sub">Artaban &middot; effective 22 August 2026</p>
+    <p class="sub">Artaban &middot; effective 14 September 2026</p>
   </header>
 
   <p>
     Artaban is made by Ian Sage, trading as Artaban Interactive. This policy
     covers the Android game <strong>Artaban</strong> (package
     <code>com.artaban.alibi</code>) and says plainly what the game does and
-    does not do with information. The short version: the game itself collects
-    nothing, and the two Google services inside it — ads and purchases — handle
-    their parts under Google's own policies.
+    does not do with information. The short version: the base game collects
+    nothing; the optional Daily Tournament posts an anonymous score to a
+    leaderboard when you play it; and the two Google services inside the game —
+    ads and purchases — handle their parts under Google's own policies.
   </p>
 
-  <p class="sect">What the game itself collects</p>
+  <p class="sect">What the base game collects</p>
   <p>
-    Nothing. Artaban has no accounts, no sign-in, no analytics, and no servers
-    of its own. Your progress — which challenges you have beaten, your swing
-    counts, your tickets — is stored only on your device and is never
-    transmitted to us. We have no way to see it.
+    Nothing. Artaban has no accounts, no sign-in, and no analytics. Your
+    progress — which challenges you have beaten, your swing counts, your
+    tickets — is stored only on your device and is never transmitted to us. We
+    have no way to see it. The one thing that ever leaves your device is a Daily
+    Tournament score, and only if you play that mode — described next.
   </p>
   <p class="aside">
     Deleting the app deletes that progress. There is also a reset option in the
     game's settings if you want a clean slate without uninstalling.
+  </p>
+
+  <p class="sect">Daily Tournament leaderboard</p>
+  <p>
+    The Daily Tournament is an optional daily mode with a worldwide leaderboard.
+    When you finish a run, and when you open the leaderboard, the game sends the
+    following to a small server we run (a Cloudflare Worker):
+  </p>
+  <ul>
+    <li>your score, the booth you reached, and which day it was</li>
+    <li>a random ID the game creates on your device — not your Google account
+      and not your device's advertising ID. It exists only to keep one score per
+      player per day and to show you your own place on the board</li>
+    <li>the carnival name the game assigned you (for example
+      &ldquo;Jolly Duck 510&rdquo;) — assigned, never chosen, and not linked to
+      your real identity</li>
+  </ul>
+  <p>
+    There are no accounts and no sign-in. We never ask for or receive your name,
+    email, or any other personal detail, and we do not store your IP address
+    alongside your score. If you never play the Daily Tournament, none of this
+    is ever sent. The leaderboard resets each day.
   </p>
 
   <p class="sect">Advertising (Google AdMob)</p>
