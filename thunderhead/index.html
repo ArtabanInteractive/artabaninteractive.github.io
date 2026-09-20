@@ -18,7 +18,7 @@ html,body{margin:0;background:#0c0e12;height:100%;overflow:hidden}
 <b>N</b> — new ball<br><br>
 <span id="thelp"></span>
 </div></div>
-<script src="render25.js"></script>
+<script src="render25.js?v=2"></script>
 <script>
 'use strict';
 // ============ THE ENGINE: our 240Hz lineage, VPX-calibrated ============
@@ -1133,6 +1133,11 @@ function releasePlunger() {
   }
   S.plungePull = 0;
 }
+// Web build: the development keys that change how the table LOOKS are gated,
+// so a visitor leaning on the keyboard cannot flip the page into the wireframe
+// greybox or drop the effects and think the game is broken. ?dev=1 restores
+// them. The playing keys (flippers, plunger, serve) and M for music stay open.
+const DEBUGKEYS = new URLSearchParams(location.search).has('dev');
 addEventListener('keydown', (e) => {
   if (AC.state === 'suspended') AC.resume();
   if (e.repeat) return;
@@ -1140,10 +1145,10 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Slash' || e.code === 'ShiftRight') { if (!S.tilt) { S.flipR = true; snd.flip(); } }
   if (e.code === 'Space') { S.plunging = true; e.preventDefault(); }
   if (e.code === 'KeyN' && !S.balls.length && !S.servePending) newBall();
-  if (e.code === 'KeyV') { VIEW25 = !VIEW25; if (VIEW25) r25init(); sizeCanvas(); }
+  if (DEBUGKEYS) if (e.code === 'KeyV') { VIEW25 = !VIEW25; if (VIEW25) r25init(); sizeCanvas(); }
   if (e.code === 'KeyM') musicSetOn(!MUSIC.on);
-  if (e.code === 'KeyX' && typeof FX !== 'undefined') { FX.low = !FX.low; R25.SS = FX.low ? 1 : 1.5; if (R25.ready) buildStaticLayer(); sizeCanvas(); flash('FX ' + (FX.low ? 'LOW' : 'HIGH'), 150); }
-  if (e.code === 'KeyF' && typeof FRAME !== 'undefined') { FRAME.enabled = !FRAME.enabled; flash('FRAMING ' + (FRAME.enabled ? 'CLOSE/FULL' : 'FULL ONLY'), 150); }
+  if (DEBUGKEYS) if (e.code === 'KeyX' && typeof FX !== 'undefined') { FX.low = !FX.low; R25.SS = FX.low ? 1 : 1.5; if (R25.ready) buildStaticLayer(); sizeCanvas(); flash('FX ' + (FX.low ? 'LOW' : 'HIGH'), 150); }
+  if (DEBUGKEYS) if (e.code === 'KeyF' && typeof FRAME !== 'undefined') { FRAME.enabled = !FRAME.enabled; flash('FRAMING ' + (FRAME.enabled ? 'CLOSE/FULL' : 'FULL ONLY'), 150); }
 });
 addEventListener('keyup', (e) => {
   if ((e.code === 'KeyZ' || e.code === 'ShiftLeft') && S.flipL) snd.flipRelease();

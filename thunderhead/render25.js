@@ -266,7 +266,12 @@ function applyWallPalette(i, rebuild = true) {
   R25.pal = i; R25.palShownUntil = performance.now() + 2500;
   if (rebuild && R25.ready) buildStaticLayer();
 }
+// Web build: gated behind ?dev=1 — see the DEBUGKEYS note in index.html. Read
+// independently of that const because the two files' load order is not
+// guaranteed and a classic script's top-level const is not on window.
+const R25_DEVKEYS = new URLSearchParams(location.search).has('dev');
 addEventListener('keydown', e => {
+  if (!R25_DEVKEYS) return;
   if (typeof VIEW25 === 'undefined' || !VIEW25 || !R25.ready || e.repeat) return;
   if (e.code === 'BracketRight') applyWallPalette((R25.pal || 0) + 1);
   if (e.code === 'BracketLeft')  applyWallPalette((R25.pal || 0) - 1);

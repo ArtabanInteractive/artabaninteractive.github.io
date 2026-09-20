@@ -59,6 +59,30 @@
           text-transform:uppercase; white-space:nowrap}
   .note{margin:8px 0 0; font-size:14.5px; line-height:1.6; font-style:italic; color:var(--hand)}
 
+  /* ---- the browser game's tile ---- */
+  /* The whole plate is the link: cabinet art, name, and what happens if you
+     press it. Square art so the storm god's face survives on a phone. */
+  .tile{
+    display:flex; align-items:center; gap:18px; margin-top:20px; padding:14px;
+    text-decoration:none; color:inherit;
+    border:1.5px solid var(--key); border-radius:3px;
+    background:rgba(46,36,30,.05);
+    box-shadow:0 4px 14px rgba(80,62,36,.24);
+    transition:box-shadow .18s ease, transform .18s ease;
+  }
+  .tile img{
+    width:132px; height:132px; flex:none; display:block; border-radius:2px;
+    border:1.5px solid var(--key); background:var(--key);
+  }
+  .tile .plate{display:flex; flex-direction:column; gap:7px; min-width:0}
+  .tile .marquee{font-size:21px; letter-spacing:.06em; color:var(--key); line-height:1}
+  .tile .kind{font-size:9px; letter-spacing:.22em; text-transform:uppercase; color:var(--teal)}
+  .tile .press{font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--poppy)}
+  .tile:hover,.tile:focus-visible{transform:translateY(-2px); box-shadow:0 8px 20px rgba(80,62,36,.32)}
+  .tile:focus-visible{outline:2px solid var(--poppy); outline-offset:3px}
+  @media (prefers-reduced-motion:reduce){ .tile{transition:none} .tile:hover,.tile:focus-visible{transform:none} }
+  @media (max-width:420px){ .tile img{width:104px; height:104px} .tile .marquee{font-size:18px} }
+
   /* ---- the store badge ---- */
   .get{margin:20px 0 0; text-align:center}
   .get img{width:200px; height:auto; display:inline-block;
@@ -130,18 +154,19 @@
   </div>
 
   <p class="sect">Play in your browser</p>
-  <div class="row">
-    <span class="name">Thunderhead</span>
-    <span class="status">Pinball &middot; free, no install</span>
-  </div>
+  <a class="tile" href="/thunderhead/">
+    <img src="shots/thunderhead.webp" alt="" width="132" height="132" loading="lazy">
+    <span class="plate">
+      <span class="kind">Pinball</span>
+      <span class="marquee">THUNDERHEAD</span>
+      <span class="press">Play free &rarr;</span>
+    </span>
+  </a>
+
   <p class="note">
     An original pinball machine, built from scratch: a storm god, a vortex skill
     shot, two locks and a ramp over the top to a plinko canopy. It runs in this
     page &mdash; phone or desktop, nothing to download.
-  </p>
-
-  <p class="get">
-    <a href="/thunderhead/">Play Thunderhead &rarr;</a>
   </p>
 
   <p class="sect">Trailer</p>
