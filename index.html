@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Artaban Interactive</title>
-<meta name="description" content="Artaban Interactive is a small independent game studio. Maker of Artaban, a carnival physics game — out now on Google Play.">
+<meta name="description" content="Artaban Interactive is a small independent game studio. Maker of Artaban, a carnival physics game on Google Play, and Thunderhead, a pinball machine you can play in your browser.">
 <meta property="og:title" content="Artaban Interactive">
 <meta property="og:description" content="A small independent game studio. Maker of Artaban, a carnival physics game — out now on Google Play.">
 <meta property="og:type" content="website">
@@ -12,10 +12,15 @@
 <link rel="icon" href="mark.svg">
 <style>
   /* The booth's four inks on its own paper. One deliberate look — this page is
-     the same object as the game, so it does not follow the viewer's theme. */
+     the same object as the game, so it does not follow the viewer's theme.
+     Everything below is set on the press sheet the logo describes: rules,
+     ticket stubs, punched counterfoils, and a colophon that names the inks. */
   :root{
     --poppy:#D6452F; --chrome:#E9A72B; --teal:#1E6E6A;
     --key:#2E241E;   --stock:#EFE4CC;  --hand:#4A5A5C;
+    /* derived, not new: a lighter sheet for the stubs and the ink wash used
+       for every rule on the page, so hairlines never drift apart */
+    --card:#F6EFDD;  --rule:rgba(46,36,30,.26);
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
@@ -29,91 +34,146 @@
     display:flex; flex-direction:column; align-items:center;
     padding:34px 20px 30px;
   }
-  main{width:100%; max-width:660px}
+  /* paper grain: one inline turbulence, no asset, barely there */
+  body::before{
+    content:''; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.16;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23g)' opacity='.5'/%3E%3C/svg%3E");
+  }
+  main{width:100%; max-width:660px; position:relative; z-index:1}
 
-  /* ---- mark + wordmark ---- */
-  header{text-align:center}
+  /* ---- masthead ---- */
+  /* Double rules above and below, the way a printer sets a nameplate. */
+  header{text-align:center; padding:18px 0 20px; border-top:3px solid var(--key);
+         border-bottom:3px solid var(--key); position:relative}
+  header::before,header::after{content:''; position:absolute; left:0; right:0;
+         height:1px; background:var(--key)}
+  header::before{top:4px} header::after{bottom:4px}
   .mark{width:clamp(116px,26vw,150px); height:auto; display:block; margin:0 auto}
   h1{
-    margin:20px 0 0; font-size:clamp(26px,7vw,42px); font-weight:700;
+    margin:18px 0 0; font-size:clamp(26px,7vw,42px); font-weight:700;
     letter-spacing:.11em; line-height:1.1; color:var(--poppy);
-    text-shadow:2px 2px 0 rgba(46,36,30,.8);
+    text-shadow:2px 2px 0 rgba(46,36,30,.8); text-wrap:balance;
   }
   .sub{margin:12px 0 0; font-size:clamp(9px,2.3vw,11px);
        letter-spacing:.3em; color:var(--teal); text-transform:uppercase}
   .lede{max-width:31em; margin:26px auto 0; text-align:center;
-        font-size:clamp(14.5px,3.4vw,16.5px); line-height:1.65}
+        font-size:clamp(14.5px,3.4vw,16.5px); line-height:1.65; text-wrap:pretty}
   /* the booth's own aside voice, borrowed for the byline */
   .byline{margin:15px auto 0; text-align:center; font-style:italic;
           font-size:13.5px; color:var(--hand)}
 
   /* ---- section heads ---- */
-  .sect{width:100%; margin:44px 0 0; padding-bottom:5px;
-        border-bottom:1px solid rgba(46,36,30,.26);
+  /* Label, then a rule running out to the margin. */
+  .sect{display:flex; align-items:center; gap:14px; width:100%; margin:46px 0 0;
         font-size:9px; letter-spacing:.24em; color:var(--teal); text-transform:uppercase}
+  .sect::after{content:''; flex:1; height:1px; background:var(--rule)}
 
-  /* ---- the game ---- */
-  .row{display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-top:16px}
-  .name{font-size:22px; color:var(--key)}
-  .status{font-size:9.5px; letter-spacing:.16em; color:var(--poppy);
-          text-transform:uppercase; white-space:nowrap}
-  .note{margin:8px 0 0; font-size:14.5px; line-height:1.6; font-style:italic; color:var(--hand)}
-
-  /* ---- the browser game's tile ---- */
-  /* The whole plate is the link: cabinet art, name, and what happens if you
-     press it. Square art so the storm god's face survives on a phone. */
-  .tile{
-    display:flex; align-items:center; gap:18px; margin-top:20px; padding:14px;
-    text-decoration:none; color:inherit;
+  /* ---- the ticket stubs ---- */
+  /* Both games sit on the same stationery: a poppy counterfoil punched three
+     times, a perforation, then the plate and the copy. The whole of
+     Thunderhead's stub is a link; Artaban's action is the store badge. */
+  .stub{
+    position:relative; display:grid; grid-template-columns:132px 1fr;
+    gap:20px; align-items:center; margin-top:20px;
+    padding:18px 18px 18px 34px;
     border:1.5px solid var(--key); border-radius:3px;
-    background:rgba(46,36,30,.05);
-    box-shadow:0 4px 14px rgba(80,62,36,.24);
-    transition:box-shadow .18s ease, transform .18s ease;
+    background:var(--card);
+    box-shadow:0 4px 14px rgba(80,62,36,.22);
   }
-  .tile img{
-    width:132px; height:132px; flex:none; display:block; border-radius:2px;
+  .stub::before{
+    content:''; position:absolute; left:0; top:0; bottom:0; width:14px;
+    border-radius:2px 0 0 2px;
+    background:
+      radial-gradient(circle at 7px 26px, var(--card) 2.6px, transparent 2.9px),
+      radial-gradient(circle at 7px 50%,  var(--card) 2.6px, transparent 2.9px),
+      radial-gradient(circle at 7px calc(100% - 26px), var(--card) 2.6px, transparent 2.9px),
+      var(--poppy);
+  }
+  .stub::after{content:''; position:absolute; left:21px; top:7px; bottom:7px;
+               border-left:1px dashed rgba(46,36,30,.4)}
+  .plate{
+    width:132px; height:132px; display:block; border-radius:2px;
     border:1.5px solid var(--key); background:var(--key);
   }
-  .tile .plate{display:flex; flex-direction:column; gap:7px; min-width:0}
-  .tile .marquee{font-size:21px; letter-spacing:.06em; color:var(--key); line-height:1}
-  .tile .kind{font-size:9px; letter-spacing:.22em; text-transform:uppercase; color:var(--teal)}
-  .tile .press{font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--poppy)}
-  .tile:hover,.tile:focus-visible{transform:translateY(-2px); box-shadow:0 8px 20px rgba(80,62,36,.32)}
-  .tile:focus-visible{outline:2px solid var(--poppy); outline-offset:3px}
-  @media (prefers-reduced-motion:reduce){ .tile{transition:none} .tile:hover,.tile:focus-visible{transform:none} }
-  @media (max-width:420px){ .tile img{width:104px; height:104px} .tile .marquee{font-size:18px} }
+  /* blockified explicitly: inside Thunderhead's anchor these are spans, and an
+     inline .blurb would flow onto the name's line and drop its margin */
+  .body{display:block; min-width:0}
+  .kind{display:block; font-size:9px; letter-spacing:.22em;
+        text-transform:uppercase; color:var(--teal)}
+  .name{display:block; margin-top:6px; font-size:25px; letter-spacing:.05em;
+        line-height:1; color:var(--key)}
+  .blurb{display:block; margin:10px 0 0; font-size:14px; line-height:1.55;
+         font-style:italic; color:var(--hand); text-wrap:pretty}
+  .act{display:inline-block; margin-top:13px; font-size:11px; letter-spacing:.16em;
+       text-transform:uppercase; color:var(--poppy)}
+
+  /* Thunderhead's stub is one big link. */
+  a.stub{text-decoration:none; color:inherit;
+         transition:box-shadow .18s ease, transform .18s ease}
+  a.stub:hover,a.stub:focus-visible{transform:translateY(-2px);
+         box-shadow:0 8px 20px rgba(80,62,36,.3)}
+  a.stub:focus-visible{outline:2px solid var(--poppy); outline-offset:3px}
 
   /* ---- the store badge ---- */
-  .get{margin:20px 0 0; text-align:center}
-  .get img{width:200px; height:auto; display:inline-block;
+  .get{margin:14px 0 0}
+  .get img{width:180px; height:auto; display:block;
            filter:drop-shadow(0 3px 8px rgba(80,62,36,.3))}
 
-  /* ---- screenshots ---- */
-  .shots{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:22px}
+  /* ---- screenshots, captioned ---- */
+  .shots{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:24px}
+  .shots figure{margin:0; display:flex; flex-direction:column; gap:8px}
   .shots img{
     width:100%; height:auto; display:block; border-radius:3px;
     border:1.5px solid var(--key); background:var(--stock);
     box-shadow:0 4px 14px rgba(80,62,36,.24);
   }
-  @media (max-width:560px){ .shots{grid-template-columns:repeat(2,1fr); gap:10px} }
+  .shots figcaption{font-size:10.5px; line-height:1.4; font-style:italic;
+                    color:var(--hand); text-wrap:pretty}
+
+  /* ---- how it is made ---- */
+  /* The studio's one claim, given three numbers to stand on. */
+  .facts{list-style:none; display:grid; grid-template-columns:repeat(3,1fr);
+         gap:20px; margin:24px 0 0; padding:0}
+  .facts li{display:flex; flex-direction:column; gap:7px; padding-top:13px;
+            border-top:3px solid var(--chrome)}
+  .facts b{font-size:29px; font-weight:400; line-height:1; color:var(--key);
+           font-variant-numeric:tabular-nums}
+  .facts span{font-size:12.5px; line-height:1.45; color:var(--hand); text-wrap:pretty}
 
   /* ---- video slot ---- */
-  .film{margin-top:22px; position:relative; width:100%; aspect-ratio:16/9;
+  .film{margin-top:24px; position:relative; width:100%; aspect-ratio:16/9;
         border:1.5px solid var(--key); border-radius:3px; overflow:hidden;
         background:rgba(46,36,30,.05)}
   .film iframe{position:absolute; inset:0; width:100%; height:100%; border:0}
-  .film .soon{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-              font-size:10px; letter-spacing:.24em; text-transform:uppercase;
-              color:rgba(46,36,30,.45)}
 
   /* ---- footer ---- */
-  footer{margin-top:46px; text-align:center;
-         font-size:11.5px; letter-spacing:.04em; color:rgba(46,36,30,.72)}
+  footer{margin-top:50px; padding-top:22px; border-top:3px solid var(--key);
+         text-align:center; font-size:11.5px; letter-spacing:.04em;
+         color:rgba(46,36,30,.72)}
   footer a{color:var(--teal); text-decoration:none; border-bottom:1px solid rgba(30,110,106,.4)}
   footer a:hover,footer a:focus{color:var(--poppy); border-bottom-color:var(--poppy)}
   footer a:focus-visible{outline:2px solid var(--poppy); outline-offset:3px; border-radius:2px}
-  .colophon{margin-top:14px; font-size:9px; letter-spacing:.22em;
+  /* the logo's own joke, made literal */
+  .inks{display:flex; justify-content:center; flex-wrap:wrap; gap:16px; margin-top:20px}
+  .inks span{display:flex; align-items:center; gap:7px; font-size:8.5px;
+             letter-spacing:.2em; text-transform:uppercase; color:rgba(46,36,30,.6)}
+  .inks i{width:11px; height:11px; border-radius:50%; border:1px solid var(--key)}
+  .colophon{margin-top:18px; font-size:9px; letter-spacing:.22em;
             text-transform:uppercase; color:rgba(46,36,30,.5)}
+
+  @media (prefers-reduced-motion:reduce){
+    a.stub{transition:none}
+    a.stub:hover,a.stub:focus-visible{transform:none}
+  }
+  @media (max-width:560px){
+    .shots{grid-template-columns:repeat(2,1fr); gap:12px}
+    .facts{grid-template-columns:1fr; gap:16px}
+  }
+  @media (max-width:420px){
+    .stub{grid-template-columns:96px 1fr; gap:15px; padding:15px 14px 15px 30px}
+    .plate{width:96px; height:96px}
+    .name{font-size:21px}
+  }
 </style>
 </head>
 <body>
@@ -131,43 +191,62 @@
   <p class="byline">Made by Ian Sage in Cootes Paradise</p>
 
   <p class="sect">Now playing</p>
-  <div class="row">
-    <span class="name">Artaban</span>
-    <span class="status">Android &middot; out now</span>
+  <div class="stub">
+    <img class="plate" src="shots/artaban.webp" alt="" width="132" height="132">
+    <div class="body">
+      <span class="kind">Android &middot; out now</span>
+      <span class="name">ARTABAN</span>
+      <p class="blurb">
+        A carnival booth rigged by physics. Twenty-five challenges, a weekly
+        tournament, and one rule: the ball only counts on the way back.
+      </p>
+      <p class="get">
+        <a href="https://play.google.com/store/apps/details?id=com.artaban.alibi">
+          <img src="google-play-badge.png" alt="Get it on Google Play" width="180" height="70">
+        </a>
+      </p>
+    </div>
   </div>
-  <p class="note">
-    A carnival booth rigged by physics. Twenty-five challenges and one rule:
-    the ball only counts on the way back.
-  </p>
-
-  <p class="get">
-    <a href="https://play.google.com/store/apps/details?id=com.artaban.alibi">
-      <img src="google-play-badge.png" alt="Get it on Google Play" width="200" height="60">
-    </a>
-  </p>
 
   <div class="shots">
-    <img src="shots/title.png"  alt="Artaban title screen: a hand-painted carnival banner under string lights" loading="lazy" width="440" height="978">
-    <img src="shots/throw.png"  alt="Challenge 1: pulling the ball back on its rope, the bottle waiting" loading="lazy" width="440" height="978">
-    <img src="shots/win.png"    alt="The bottle knocked down on the return swing — DOWN IT GOES!" loading="lazy" width="440" height="978">
-    <img src="shots/book.png"   alt="The book of tickets, one stub per challenge, punches earned" loading="lazy" width="440" height="978">
+    <figure>
+      <img src="shots/title.png" alt="Artaban title screen: a hand-painted carnival banner under string lights" loading="lazy" width="440" height="978">
+      <figcaption>Before anything goes wrong</figcaption>
+    </figure>
+    <figure>
+      <img src="shots/throw.png" alt="Challenge 1: pulling the ball back on its rope, the bottle waiting" loading="lazy" width="440" height="978">
+      <figcaption>Pulling back is the easy part</figcaption>
+    </figure>
+    <figure>
+      <img src="shots/win.png" alt="The bottle knocked down on the return swing — DOWN IT GOES!" loading="lazy" width="440" height="978">
+      <figcaption>It only counts on the way back</figcaption>
+    </figure>
+    <figure>
+      <img src="shots/book.png" alt="The book of tickets, one stub per challenge, punches earned" loading="lazy" width="440" height="978">
+      <figcaption>One stub per challenge</figcaption>
+    </figure>
   </div>
 
   <p class="sect">Play in your browser</p>
-  <a class="tile" href="/thunderhead/">
-    <img src="shots/thunderhead.webp" alt="" width="132" height="132" loading="lazy">
-    <span class="plate">
-      <span class="kind">Pinball</span>
-      <span class="marquee">THUNDERHEAD</span>
-      <span class="press">Play free &rarr;</span>
+  <a class="stub" href="/thunderhead/">
+    <img class="plate" src="shots/thunderhead.webp" alt="" width="132" height="132" loading="lazy">
+    <span class="body">
+      <span class="kind">Pinball &middot; free, nothing to install</span>
+      <span class="name">THUNDERHEAD</span>
+      <span class="blurb">
+        An original machine, built from scratch: a storm god, a vortex skill
+        shot, two locks, and a ramp over the top to a plinko canopy.
+      </span>
+      <span class="act">Play free &rarr;</span>
     </span>
   </a>
 
-  <p class="note">
-    An original pinball machine, built from scratch: a storm god, a vortex skill
-    shot, two locks and a ramp over the top to a plinko canopy. It runs in this
-    page &mdash; phone or desktop, nothing to download.
-  </p>
+  <p class="sect">How it is made</p>
+  <ul class="facts">
+    <li><b>8,009</b><span>lines of JavaScript in Artaban. No game engine underneath it.</span></li>
+    <li><b>45</b><span>sounds in Thunderhead — every effect and every piece of music written as code.</span></li>
+    <li><b>0</b><span>stock images or sampled instruments in either game.</span></li>
+  </ul>
 
   <p class="sect">Trailer</p>
   <div class="film">
@@ -180,7 +259,15 @@
     <a href="mailto:artabangames@gmail.com">artabangames@gmail.com</a>
     &nbsp;&middot;&nbsp;
     <a href="/privacy-policy/">Privacy policy</a>
-    <div class="colophon">Artaban Interactive</div>
+
+    <div class="inks">
+      <span><i style="background:#D6452F"></i>Poppy</span>
+      <span><i style="background:#E9A72B"></i>Chrome</span>
+      <span><i style="background:#1E6E6A"></i>Teal</span>
+      <span><i style="background:#2E241E"></i>Key</span>
+    </div>
+
+    <div class="colophon">Four inks, same press &middot; Artaban Interactive</div>
   </footer>
 </main>
 </body>
