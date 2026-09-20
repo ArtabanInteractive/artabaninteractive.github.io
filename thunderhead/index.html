@@ -1,0 +1,1762 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>THUNDERHEAD — Artaban Interactive</title>
+<style>
+html,body{margin:0;background:#0c0e12;height:100%;overflow:hidden}
+#wrap{display:flex;height:100vh;height:100dvh;align-items:center;justify-content:center;gap:18px}
+#stage{position:relative;box-shadow:0 0 40px #000}
+#stage canvas{display:block;position:absolute;left:0;top:0}
+#side{color:#8fa8c8;font:13px ui-monospace,monospace;max-width:220px}
+#side b{color:#e0b95a}
+@media (max-width:700px){ #side{display:none} #wrap{gap:0} }
+</style></head>
+<body><div id="wrap"><div id="stage"><canvas id="cs"></canvas><canvas id="c"></canvas></div><div id="side">
+<b id="ttitle">TABLE</b><br><br>
+<b>Z / left-shift</b> — left flipper<br>
+<b>/ or right-shift</b> — right flipper<br>
+<b>hold SPACE</b> — plunge, release to fire<br>
+<b>N</b> — new ball<br><br>
+<span id="thelp"></span>
+</div></div>
+<script src="render25.js"></script>
+<script>
+'use strict';
+// ============ THE ENGINE: our 240Hz lineage, VPX-calibrated ============
+// world in VPX units (952.94 x 1976.47, ball r25), slope 5.25deg classic.
+const FPS = 240, SUB = 4, H = 1 / (FPS * SUB);
+const GRAV = 1600;                 // tuned: full-field roll ~2.6s, classic pace
+const BALL_R = 25;
+
+let GEO = null;
+const S = { balls: [], score: 0, ballsLeft: 3, drops: [], lanes: [], bankDone: {}, rampOpen: {}, spinVal: 100,
+  saucerLit: false, saucerHold: 0, plungePull: 0, plunging: false, msg: 'PLUNGE TO START', msgT: 0,
+  flipL: false, flipR: false, angL: 0, angR: 0, over: false };
+
+// ============ M3 — THUNDERHEAD RULES ============
+// The arc (SCARAB-RULES.md, reskinned to storm marks): three bank TRIALS light their
+// marks -> with all three lit, one loop rip BREAKS THE STORM (timed cyan mode, boosted
+// scoring, saucer = jackpot, re-rips extend) -> mode ends, trials reset, loop value
+// ratchets and carries. Two-state lights only, one arc, no stacked modes (era law).
+// Trial marks match the bay labels printed on the master drawing, so art and rules
+// name the same things: bank 0 = TR = VANE, bank 1 = centre = EYE, bank 2 = LL = FUNNEL.
+const TRIAL_NAMES = ['VANE', 'EYE', 'FUNNEL'];
+const RULES = {
+  loopBase: 1500, loopStep: 500, loopMax: 6000,   // ratchet: carries across mode ends
+  stormSecs: 25, stormExtend: 8, stormMaxSecs: 45,
+  jackpotBase: 25000, jackpotStep: 10000,
+  stormMult: 3,                                    // all switch scoring x3 while broken
+  bonusPerPop: 100, bonusPerDrop: 200, bonusMultMax: 5,
+};
+const LOCKS_FOR_MULTIBALL = 2;
+const RULES_REPEAT_LOCK = 25000;   // same lock twice in a round: flat, no escalation
+// THE SCORE TABLE (2026-09-12). Every switch value in one place, scaled so a
+// three-drain game is tens of thousands, a game with a lock and a couple of
+// chutes is hundreds of thousands, and a multiball with jackpots plus the
+// finale is millions. award() still multiplies by the storm level. Chute,
+// hole and peg values live in the geometry; jackpot escalation in R.
+const SCORE = {
+  sling: 250, pop: 1000, popMultiball: 3000,
+  lane: 5000, lanesAll: 25000,
+  drop: 5000, bankSwept: 50000,
+  lock: 50000,
+  bonusPop: 1000, bonusDrop: 2000, bonusLane: 1000,
+};
+const R = {
+  locks: 0,               // balls held in the lock vortexes
+  multiball: 0,           // balls in play when multiball started (0 = not running)
+  mbJack: {},             // which locks have been jackpotted this multiball round
+  mbJackVal: 100000,      // lock jackpot, escalates through the multiball
+  superLit: false,        // both locks hit -> canopy hole pays the super
+  mbLit: false,           // both locks FULL -> canopy hole starts multiball
+  // STORM LEVELS. Each multiball completed raises the level; scoring scales
+  // with it and from level 2 the rollover set must be completed before the
+  // locks will arm. Three multiballs and the giant's face lights: the one
+  // part of the table that can never hold hardware becomes the final shot.
+  level: 1,               // 1..3, multiplies every award
+  mbCount: 0,             // multiballs completed this game
+  setDone: false,         // rollover set completed since the last multiball
+  faceLit: false,         // wizard: shoot both eyes
+  eyes: [0, 0],           // which eyes have been hit
+  mouthOpen: false,       // both eyes hit: feed the giant to break the storm
+  trials: [0, 0, 0],      // which storm marks are lit
+  loopVal: RULES.loopBase,
+  storm: 0,               // seconds remaining of THE STORM BREAKS (0 = idle)
+  stormCount: 0,          // times broken this game
+  jackpot: RULES.jackpotBase,
+  bonus: 0, bonusMult: 1,
+  bonusPayout: 0,         // remaining amount still being counted onto the score
+};
+function rulesResetGame() {
+  S.rampOpen = {};
+  R.level = 1; R.mbCount = 0; R.setDone = false; R.faceLit = false; R.eyes = [0, 0]; R.mouthOpen = false;
+  R.locks = 0; R.multiball = 0; R.mbJack = {}; R.mbJackVal = 100000;
+  R.superLit = false; R.mbLit = false;
+  for (const bw of BOWLS) bw.occupied = false;
+  R.trials = [0, 0, 0]; R.loopVal = RULES.loopBase; R.storm = 0; R.stormCount = 0;
+  R.jackpot = RULES.jackpotBase; R.bonus = 0; R.bonusMult = 1; R.bonusPayout = 0;
+}
+// NOT reset here: S.rampOpen. Sweeping the bank opens the canopy for the whole
+// game, not just the ball, so only rulesResetGame clears it.
+function rulesResetBall() {
+  R.bonus = 0; R.bonusPayout = 0;
+  // SUPER is a multiball award. It does not survive the ball it was lit on.
+  R.superLit = false;
+}
+const trialsLit = () => R.trials.reduce((a, b) => a + b, 0);
+// every switch score routes through here so THE STORM multiplier is impossible to forget
+function award(pts) {
+  const scored = Math.round(pts * (R.storm > 0 ? RULES.stormMult : 1) * (R.level || 1));
+  S.score += scored;
+  return scored;            // so a flash can show what was ACTUALLY scored
+}
+function breakTheStorm() {
+  R.storm = RULES.stormSecs;
+  R.stormCount++;
+  S.saucerLit = true;                       // saucer collects the jackpot while broken
+  snd.storm();
+  flash('THE STORM BREAKS!');
+  hap(120);
+}
+function endStorm() {
+  R.storm = 0;
+  R.trials = [0, 0, 0];                     // trials reset...
+  R.loopVal = Math.min(RULES.loopMax, R.loopVal + RULES.loopStep);   // ...loop value carries
+  R.jackpot = RULES.jackpotBase + R.stormCount * RULES.jackpotStep;
+  S.saucerLit = false;
+  // (was: refill every bank here. The drop bank is now a permanent unlock, so
+  // nothing outside a new game may stand its targets back up.)
+  flash('STORM PASSES — LOOP ' + R.loopVal);
+}
+
+// ---- audio: synthesized, license-free ----
+const AC = new (window.AudioContext || window.webkitAudioContext)();
+const masterBus = AC.createGain(); masterBus.gain.value = 1.0; masterBus.connect(AC.destination);
+const sfxBus = AC.createGain();    sfxBus.gain.value = 1.0;    sfxBus.connect(masterBus);
+const musicBus = AC.createGain();  musicBus.gain.value = 0.55; musicBus.connect(masterBus);
+// ============ MUSIC (ported from the art build, 2026-09-11) ============
+// Four Suno tracks (Ian's own, Premier plan = commercial rights cleared). The
+// files live in music/ which is git-ignored (9 MB); the game runs without them.
+// loopEnd values are EXPLICIT constants and must never be replaced by
+// buffer.duration: the Vorbis decoder hands back ~15-20ms of frame padding past
+// the true end, which would splice a sliver of junk into every wrap. Each value
+// is the last whole bar before that track's fade-out. Seams confirmed by ear
+// (Ian, 2026-08-26).
+const MUSIC = {
+  tracks: {
+    intro:     { url: 'music/intro.ogg',     loopEnd: 49.20  },
+    gameplay1: { url: 'music/gameplay1.ogg', loopEnd: 144.15 },
+    gameplay2: { url: 'music/gameplay2.ogg', loopEnd: 129.87 },
+    gameplay3: { url: 'music/gameplay3.ogg', loopEnd: 163.01 },
+  },
+  bufs: {}, src: null, gain: null, cur: null,
+  bag: [],            // shuffle bag so the same track never repeats back-to-back
+  on: true, loaded: false,
+};
+try { MUSIC.on = localStorage.getItem('th_music') !== '0'; } catch (e) {}
+async function musicLoad() {
+  for (const [k, t] of Object.entries(MUSIC.tracks)) {
+    try {
+      const r = await fetch(t.url);
+      if (!r.ok) continue;
+      MUSIC.bufs[k] = await AC.decodeAudioData(await r.arrayBuffer());
+    } catch (e) { /* music is optional --- never let it break the game */ }
+  }
+  MUSIC.loaded = true;
+}
+function musicPlay(key, fade = 1.2) {
+  if (!MUSIC.on || !MUSIC.bufs[key] || AC.state !== 'running') return;
+  if (MUSIC.cur === key && MUSIC.src) return;
+  musicStop(fade);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(1, AC.currentTime + fade);
+  g.connect(musicBus);
+  const s = AC.createBufferSource();
+  s.buffer = MUSIC.bufs[key];
+  s.loop = true; s.loopStart = 0; s.loopEnd = MUSIC.tracks[key].loopEnd;
+  s.connect(g); s.start();
+  MUSIC.src = s; MUSIC.gain = g; MUSIC.cur = key;
+}
+function musicStop(fade = 0.8) {
+  const s = MUSIC.src, g = MUSIC.gain;
+  MUSIC.src = null; MUSIC.gain = null; MUSIC.cur = null;
+  if (!s) return;
+  const t = AC.currentTime;
+  try {
+    g.gain.cancelScheduledValues(t);
+    g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + fade);
+    s.stop(t + fade + 0.05);
+  } catch (e) { try { s.stop(); } catch (e2) {} }
+}
+function musicNextGameplay() {
+  if (!MUSIC.bag.length) {
+    MUSIC.bag = ['gameplay1', 'gameplay2', 'gameplay3']
+      .filter(k => MUSIC.bufs[k])
+      .sort(() => Math.random() - 0.5);
+    // never repeat the track that just finished across a bag boundary
+    if (MUSIC.bag.length > 1 && MUSIC.bag[0] === MUSIC.cur) MUSIC.bag.push(MUSIC.bag.shift());
+  }
+  const next = MUSIC.bag.shift();
+  if (next) musicPlay(next);
+}
+// Called every frame: starts the right track once audio is unlocked, and handles
+// the attract <-> play transition. A track runs for a WHOLE GAME, not a ball
+// (Ian, 2026-08-26: "do not start new songs with each death. Just keep the song
+// going"). The rotation happens once per game, on the way back out of attract.
+function musicEnsure() {
+  if (!MUSIC.on || !MUSIC.loaded || AC.state !== 'running') return;
+  const attract = S.over;
+  sfxAmbience(!attract);
+  if (attract) { musicPlay('intro'); return; }
+  if (!MUSIC.cur || MUSIC.cur === 'intro') musicNextGameplay();
+}
+function musicSetOn(v) {
+  MUSIC.on = v;
+  try { localStorage.setItem('th_music', v ? '1' : '0'); } catch (e) {}
+  if (!v) { musicStop(0.35); sfxAmbience(false); } else musicEnsure();
+}
+
+// ---- SFX ENGINE, rebuilt (Sonnet, overnight, 2026-08-28) ----
+// The previous set was bare oscillator blips: one wave, one exponential decay,
+// nothing else. Real pinball hits are METAL + AIR + a struck body, so every event
+// below is a layered stack — an oscillator "body" (the struck material's pitch)
+// plus a filtered noise "transient" (the strike itself) plus, for anything with
+// mass, a pitch envelope. blip() is kept for the few pure-tone cases (bonusTick).
+function blip(freq, dur, type, vol) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type || 'square'; o.frequency.value = freq;
+  g.gain.value = vol || 0.06;
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+  o.connect(g); g.connect(sfxBus);
+  o.start(); o.stop(AC.currentTime + dur);
+}
+// A short burst of filtered noise — the "transient" every physical hit has that a
+// pure oscillator can't produce. One shared white-noise buffer, reused and sliced,
+// since generating fresh noise per call is wasted work at 240Hz physics.
+const NOISE_BUF = (() => {
+  const b = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+})();
+function noiseHit(dur, vol, freq, q, type) {
+  const src = AC.createBufferSource(); src.buffer = NOISE_BUF;
+  src.loopStart = Math.random() * 1.5; src.loop = false;
+  const f = AC.createBiquadFilter(); f.type = type || 'bandpass';
+  f.frequency.value = freq || 1200; f.Q.value = q ?? 1.2;
+  const g = AC.createGain(); g.gain.value = vol;
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+  src.connect(f); f.connect(g); g.connect(sfxBus);
+  src.start(); src.stop(AC.currentTime + dur);
+}
+// An oscillator "body" with independent pitch AND amplitude envelopes, so a hit
+// can pitch-drop as it decays (a struck solenoid, a falling target) instead of
+// just going quiet at a fixed pitch.
+function tone(freq, dur, type, vol, opts) {
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, AC.currentTime);
+  if (opts && opts.pitchTo) o.frequency.exponentialRampToValueAtTime(Math.max(1, opts.pitchTo), AC.currentTime + dur);
+  g.gain.setValueAtTime(0.0001, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(vol, AC.currentTime + (opts?.attack || 0.002));
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + dur);
+  o.connect(g); g.connect(sfxBus);
+  o.start(); o.stop(AC.currentTime + dur);
+}
+const hap = (ms) => { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} };
+const snd = {
+  // rubber striking a moving bat — noise crack + a short mid body, not just a beep
+  flip: () => { noiseHit(0.03, 0.05, 2400, 0.9); tone(210, 0.04, 'triangle', 0.05, { pitchTo: 140 }); },
+  // pop bumper: hard transient thock + the ring's own resonant pitch decaying
+  pop: () => { noiseHit(0.05, 0.11, 900, 1.4); tone(300, 0.09, 'square', 0.08, { pitchTo: 180 }); tone(620, 0.05, 'triangle', 0.04); hap(12); },
+  sling: () => { noiseHit(0.04, 0.09, 1500, 1.1); tone(260, 0.07, 'sawtooth', 0.06, { pitchTo: 160 }); hap(12); },
+  spin: () => noiseHit(0.03, 0.05, 2800, 2.2),
+  // drop target: falling metal plate — noise clack then a low wooden thud with a
+  // real pitch drop, plus a mechanical click as the mech catches it
+  drop: () => { noiseHit(0.02, 0.1, 3200, 1.6); tone(160, 0.16, 'sawtooth', 0.09, { pitchTo: 55 }); setTimeout(() => noiseHit(0.015, 0.05, 4500, 3), 70); hap(18); },
+  bank: () => { [440, 550, 660, 880].forEach((f, i) => setTimeout(() => { tone(f, 0.12, 'triangle', 0.08); noiseHit(0.02, 0.03, f * 3, 2); }, i * 90)); hap(40); },
+  lane: () => tone(520, 0.08, 'sine', 0.06),
+  laneAll: () => { [523, 659, 784].forEach((f, i) => setTimeout(() => tone(f, 0.1, 'triangle', 0.07), i * 80)); },
+  // saucer: ball rattling into a metal cup — noise roll into a resonant sine well
+  saucer: () => { noiseHit(0.22, 0.06, 700, 0.8, 'lowpass'); tone(200, 0.3, 'sine', 0.07, { pitchTo: 140 }); },
+  award: () => { [392, 523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.14, 'triangle', 0.09), i * 70)); },
+  drain: () => { noiseHit(0.4, 0.05, 300, 0.6, 'lowpass'); tone(220, 0.3, 'sawtooth', 0.06, { pitchTo: 90 }); setTimeout(() => tone(110, 0.5, 'sawtooth', 0.07, { pitchTo: 40 }), 150); hap(60); },
+  wall: (v) => { if (v > 300) noiseHit(0.03, Math.min(0.05, v / 20000), 1400 + Math.min(v, 1200), 1.2); },
+  // MODE ENTRY (existing) — kept, now layered with a real sub rumble under it
+  storm: () => {
+    noiseHit(0.5, 0.08, 200, 0.5, 'lowpass');
+    [60, 50, 42, 90].forEach((f, i) => setTimeout(() => tone(f, 0.22, 'sawtooth', 0.1), i * 60));
+    [330, 415, 494, 660].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'triangle', 0.08), 220 + i * 90));
+    hap(180);
+  },
+  // MODE EXIT — new. endStorm() previously fired silently; a mode that announces
+  // itself starting and then just stops reads as a bug, not a passing storm.
+  stormEnd: () => {
+    noiseHit(0.5, 0.07, 260, 0.6, 'lowpass');
+    tone(180, 0.45, 'sawtooth', 0.08, { pitchTo: 55 });
+    setTimeout(() => tone(140, 0.35, 'sine', 0.05, { pitchTo: 60 }), 120);
+    hap(60);
+  },
+  thunder: () => { noiseHit(0.3, 0.07, 220, 0.5, 'lowpass'); tone(70, 0.14, 'sawtooth', 0.09); setTimeout(() => tone(55, 0.2, 'sawtooth', 0.08), 60); hap(70); },
+  bonusTick: () => blip(700, 0.02, 'square', 0.03),
+  // GATE VOICES — new. Both GATE (the diverter) and LGATE (the launch-lane seal)
+  // previously rose and retracted in total silence. Each gets a solenoid-driven
+  // metal-plate voice: a mechanical clack from the catch, and a short pitched
+  // clunk from the plate itself, rising in pitch as it comes UP (steel meeting
+  // its stop) and falling as it drops back flush (settling into the slot).
+  gateUp:    () => { noiseHit(0.03, 0.07, 2000, 1.0); tone(150, 0.09, 'square', 0.06, { pitchTo: 260 }); },
+  gateDown:  () => { noiseHit(0.025, 0.06, 1600, 1.1); tone(220, 0.08, 'square', 0.05, { pitchTo: 110 }); },
+};
+snd.bonus = snd.bonus || snd.bonusTick;
+
+// ============ THE STORM VOICES (2026-09-11) ============
+// Three synthesized storms were rejected by ear; these are Ian's own Suno
+// takes, cut and normalised by sfx-build.mjs into sfx-out/*.ogg. Every one is
+// a thing in the machine doing something (the Alibi rule). Where a sample is
+// missing the old synth voice plays instead, so the game never goes silent.
+const SFX = {
+  names: ['vortex-enter', 'chute-small', 'chute-eye', 'lock', 'multiball', 'jackpot', 'super-jackpot',
+          'storm-level', 'eye', 'storm-breaks', 'bank-swept', 'canopy-hole', 'tilt', 'ambience',
+          // THE MACHINE (CC0 recordings of real EMs, 2026-09-12): a sample layer
+          // over the synth voices below; each synth stays as the fallback.
+          'flip-1', 'flip-2', 'flip-3', 'flip-release', 'pop-1', 'pop-2', 'pop-3', 'pop-4', 'sling',
+          'drop-1', 'drop-2', 'bank', 'lane', 'lane-all', 'award', 'bonus-tick', 'knock', 'spin',
+          'saucer', 'plunge-1', 'plunge-2', 'gate', 'credit', 'peg-1', 'peg-2', 'peg-3', 'peg-4'],
+  bufs: {}, amb: null,
+};
+async function sfxLoad() {
+  for (const n of SFX.names) {
+    try { const r = await fetch('sfx-out/' + n + '.ogg'); if (r.ok) SFX.bufs[n] = await AC.decodeAudioData(await r.arrayBuffer()); }
+    catch (e) { /* optional --- the synth fallback covers it */ }
+  }
+}
+function sample(name, vol = 1, rate = 1) {
+  const b = SFX.bufs[name];
+  if (!b || AC.state !== 'running') return false;
+  const s = AC.createBufferSource(); s.buffer = b; s.playbackRate.value = rate;
+  const g = AC.createGain(); g.gain.value = vol;
+  s.connect(g); g.connect(sfxBus); s.start();
+  return true;
+}
+// wind and distant rain under the music while a game is on; through the music
+// bus so the M key silences it with the music
+function sfxAmbience(on) {
+  if (on && !SFX.amb && SFX.bufs.ambience && AC.state === 'running') {
+    const s = AC.createBufferSource(); s.buffer = SFX.bufs.ambience; s.loop = true;
+    const g = AC.createGain(); g.gain.setValueAtTime(0.0001, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.22, AC.currentTime + 2);
+    s.connect(g); g.connect(musicBus); s.start(); SFX.amb = { s, g };
+  } else if (!on && SFX.amb) {
+    const { s, g } = SFX.amb; SFX.amb = null;
+    try { g.gain.cancelScheduledValues(AC.currentTime); g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), AC.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + 1); s.stop(AC.currentTime + 1.1); } catch (e) {}
+  }
+}
+// The machine voices: which samples each snd.* event draws from (a random
+// variant so a hundred flips a ball do not sound like one flip a hundred
+// times), and how loud. Anything not listed (walls, storm synths) is untouched.
+const MECH = {
+  flip: ['flip-1', 'flip-2', 'flip-3'], flipRelease: ['flip-release'],
+  pop: ['pop-1', 'pop-2', 'pop-3', 'pop-4'], sling: ['sling'], drop: ['drop-1', 'drop-2'], bank: ['bank'],
+  lane: ['lane'], laneAll: ['lane-all'], award: ['award'], bonusTick: ['bonus-tick'], knock: ['knock'],
+  spin: ['spin'], saucer: ['saucer'], plunge: ['plunge-1', 'plunge-2'], gateUp: ['gate'], gateDown: ['gate'], credit: ['credit'],
+  peg: ['peg-1', 'peg-2', 'peg-3', 'peg-4'],
+};
+const MECH_GAIN = { flip: 0.7, flipRelease: 0.45, pop: 0.8, sling: 0.7, drop: 0.8, bonusTick: 0.5, spin: 0.6, gateUp: 0.5, gateDown: 0.5 };
+snd.peg = (v) => { if (v > 60) noiseHit(0.02, Math.min(0.06, v / 12000), 3200, 2.0); };   // synth fallback
+function mechInstall() {
+  for (const [k, names] of Object.entries(MECH)) {
+    const synth = snd[k];
+    snd[k] = (...a) => {
+      const n = names[(Math.random() * names.length) | 0];
+      const vol = k === 'peg' ? Math.min(1, 0.25 + (a[0] || 0) / 900) : (MECH_GAIN[k] ?? 1);
+      if (!sample(n, vol)) { if (synth) synth(...a); }
+    };
+  }
+}
+mechInstall();
+snd.laneAll = snd.laneAll || snd.lane;
+
+
+// ---- geometry prep ----
+let SEGS = [], SLINGSEGS = [], DROPSEGS = [], POSTS = [];
+function buildColliders() {
+  SEGS = []; SLINGSEGS = []; DROPSEGS = [];
+  for (const w of GEO.walls) {
+    const p = w.pts;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[i], b = p[(i + 1) % p.length];
+      if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.5) continue;
+      SEGS.push({ x1: a[0], y1: a[1], x2: b[0], y2: b[1], e: 0.3 });
+    }
+  }
+  // A slingshot kicks from ONE face: the long rubber that faces the middle of
+  // the table. Every edge of the polygon used to kick (Ian, 2026-09-12: "when
+  // you hit the outsides of them, it causes a sling effect?" --- it did), so a
+  // ball brushing the back of a sling from the outlane got fired. Now the
+  // back and the short ends are plain rubber walls.
+  GEO.slings.forEach((w, si) => {
+    const p = w.pts;
+    const cx0 = p.reduce((t, q) => t + q[0], 0) / p.length, cy0 = p.reduce((t, q) => t + q[1], 0) / p.length;
+    for (let i = 0; i < p.length; i++) {
+      const a = p[i], b = p[(i + 1) % p.length];
+      const L = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      if (L < 0.5) continue;
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      let nx = b[1] - a[1], ny = -(b[0] - a[0]);                 // a normal
+      if (nx * (mx - cx0) + ny * (my - cy0) < 0) { nx = -nx; ny = -ny; }   // make it point OUT of the sling
+      const facesCentre = nx * (GEO.W / 2 - mx) + ny * (GEO.H / 2 - my) > 0;
+      const seg = { x1: a[0], y1: a[1], x2: b[0], y2: b[1], e: 0.4, force: w.force, si };
+      if (facesCentre && L > 60) SLINGSEGS.push(seg); else SEGS.push(seg);
+    }
+  });
+  for (let i = 0; i < GEO.drops.length; i++) {
+    const d = GEO.drops[i], a = d.rot * Math.PI / 180;
+    DROPSEGS.push({ i, x1: d.x - 18 * Math.cos(a), y1: d.y - 18 * Math.sin(a),
+      x2: d.x + 18 * Math.cos(a), y2: d.y + 18 * Math.sin(a), e: 0.35 });
+  }
+  for (const g of GEO.guards) {
+    const a = g.rot * Math.PI / 180;
+    SEGS.push({ x1: g.x - 18 * Math.cos(a), y1: g.y - 18 * Math.sin(a),
+      x2: g.x + 18 * Math.cos(a), y2: g.y + 18 * Math.sin(a), e: 0.6 });
+  }
+}
+
+// ---- RAMPS / BALL HEIGHT (z-engine, ported from thunderhead-play.html) ----
+// A ramp is a GUIDED RAIL: a polyline carrying a height profile. On entry the
+// ball is captured and moves in 1D along that curve, ignoring playfield
+// collision; at the end it releases tangent and is a projectile until it lands.
+// RAMP_CLIMB is DERIVED, not tuned: GRAV is the in-plane gravity of a playfield
+// tilted ~6.5deg (g*sin t). Lifting the ball off that playfield costs g*cos t,
+// so climbing costs GRAV/tan(t) — about 8.8x as expensive as rolling uphill.
+// Deriving it means ramp difficulty self-calibrates with height.
+// LOWERED for round 3 (was GRAV/tan(6.5°) ≈ 14043). That derivation looked
+// principled but wasn't: GRAV=1600 was itself tuned by feel, so the "derived"
+// climb constant just laundered a guess — and it made every round-2 ramp land
+// at 75-89% of a max flip (Ian: "extremely difficult"). Halved and validated
+// by feel per the handoff. NOTE the real difficulty driver is up-table travel,
+// not height: thresholds are set by a ramp's topmost point, so round-3 ramps
+// turn around mid-table instead of climbing to the crown.
+const RAMP_CLIMB = GRAV / Math.tan(13 * Math.PI / 180);
+const BOWL_ACC  = 56000;  // cone steepness: rEq = v^2 / BOWL_ACC
+const BOWL_DRAG = 0.30;   // per second; what makes it spiral in at all
+let BOWLS = [];
+function buildBowls() {
+  BOWLS = (GEO.bowls || []).map((w, id) => ({
+    id, name: w.name || ('Bowl' + id), x: w.x, y: w.y, r: w.r,
+    zRim: w.zRim ?? 35, zFloor: w.zFloor ?? 0, lock: !!w.lock, catch: !!w.catch,
+    // outermost first --- the ball meets them in that order on its way down
+    chutes: (w.chutes || []).slice().sort((a, c) => c.r - a.r),
+    // A lock that is holding a ball is CLOSED: this chord spans its mouth from
+    // one gap edge to the other, and only collides while occupied. Without it
+    // you could lock the same vortex twice and the counter would mean nothing.
+    gate: w.gap ? (() => {
+      const h = w.gap.w / 2, d = Math.PI / 180;
+      return { x1: w.x + w.r * Math.cos((w.gap.c - h) * d), y1: w.y + w.r * Math.sin((w.gap.c - h) * d),
+               x2: w.x + w.r * Math.cos((w.gap.c + h) * d), y2: w.y + w.r * Math.sin((w.gap.c + h) * d),
+               e: 0.3 };
+    })() : null,
+    occupied: false,
+    floor: w.floor || null,
+  }));
+}
+function bowlEnter(b, bw, v) {
+  const th = Math.atan2(b.y - bw.y, b.x - bw.x);
+  // which way round it was already travelling when it met the rim
+  const dir = (-Math.sin(th) * b.vx + Math.cos(th) * b.vy) >= 0 ? 1 : -1;
+  b.ramp = null; b.deck = null; b.vz = 0;
+  // r0 is the orbit the ball ARRIVED able to hold. It is the whole input to
+  // the mechanic: you can only fall out of a chute you were riding above.
+  const r0 = Math.min(bw.r, (v * v) / BOWL_ACC);
+  b.bowl = { id: bw.id, r: bw.r, th, v: Math.abs(v), dir, swept: 0, r0, age: 0 };
+  // the locks no longer borrow the vortex swirl (Ian, 2026-09-12: "too similar
+  // to the vortex"): a lock spiral is the electrical charge-up, the big funnel
+  // keeps the wind
+  if (bw.lock) sample('lock', 0.9) || snd.award(); else sample('vortex-enter') || snd.award();
+}
+function bowlExit(b, bw, c) {
+  b.bowl = null; b.z = 0; b.vz = 0;
+  if (bw.lock) {
+    // DURING MULTIBALL a lock does not lock --- it pays a jackpot and spits the
+    // ball straight back out. Without this, shooting a lock mid-multiball
+    // removed a ball from play and a second one re-triggered multiball inside
+    // itself. The two vortexes are the only idle hardware once multiball is
+    // running, so this is what they are for.
+    if (R.multiball) {
+      b.x = bw.x; b.y = bw.y; b.vx = 0; b.vy = 300; b.noCatch = 150;
+      const first = !R.mbJack[bw.name];
+      if (first) {
+        // a lock not yet collected this round: the real jackpot, and it grows
+        const got = award(R.mbJackVal); sample('jackpot') || snd.award(); hap(60);
+        flash('JACKPOT — ' + got.toLocaleString());
+        R.mbJackVal += 50000;
+        R.mbJack[bw.name] = true;
+      } else {
+        // the same lock again: pays, but flat, and does NOT advance the value.
+        // You have to alternate to build it.
+        const got = award(RULES_REPEAT_LOCK); snd.pop();
+        flash('AGAIN — ' + got.toLocaleString());
+      }
+      const both = BOWLS.filter(w => w.lock).every(w => R.mbJack[w.name]);
+      if (both && first) {
+        R.mbJack = {}; R.superLit = true;
+        for (const r of RAMPS) if (r.gatedBy != null) S.rampOpen[r.name] = true;
+        setTimeout(() => flash('SUPER JACKPOT LIT'), 900);
+      }
+      return;
+    }
+    snd.saucer(); hap(60);   // the ball dropping into the cup: the charge-up already played on the way in
+    b.locked = true;   // held, NOT dead --- a lock must not cost a ball
+    bw.occupied = true;
+    const got = award(SCORE.lock);
+    flash('BALL LOCKED — ' + got.toLocaleString());
+    return;
+  }
+  b.x = c.exit[0]; b.y = c.exit[1]; b.vx = c.exit[2]; b.vy = c.exit[3];
+  if (c.value) { award(c.value); sample(c.value >= 100000 ? 'chute-eye' : 'chute-small') || snd.award(); }
+  flash((c.label || 'CHUTE') + ' — ' + (c.value || 0).toLocaleString());
+}
+// The LOCKS spiral in twice as fast as the skill-shot vortex (Ian, 2026-09-11:
+// a ball kicked up into the west lock out of the bumper nest "spends too long,
+// almost like it's stuck" --- measured 1.8-4.2 s from 1200-2500 entry speed).
+// Drag is what sets the spiral time, and the locks have no chutes to pick, so
+// nothing else about them depends on it.
+const LOCK_DRAG = BOWL_DRAG * 2;
+function stepBowl(b) {
+  const bw = BOWLS[b.bowl.id], q = b.bowl;
+  q.v = Math.max(0, q.v - (bw.lock ? LOCK_DRAG : BOWL_DRAG) * q.v * H);
+  const rEq = Math.min(bw.r, (q.v * q.v) / BOWL_ACC);
+  q.r += (rEq - q.r) * Math.min(1, 6 * H);
+  const w = q.v / Math.max(18, q.r);
+  q.th += w * q.dir * H; q.swept += w * H;
+  b.x = bw.x + q.r * Math.cos(q.th);
+  b.y = bw.y + q.r * Math.sin(q.th);
+  b.z = bw.zFloor + (bw.zRim - bw.zFloor) * (q.r / bw.r);
+  b.vx = -Math.sin(q.th) * q.v * q.dir; b.vy = Math.cos(q.th) * q.v * q.dir;
+  q.age += H;
+  // A ball that can no longer hold ANY orbit sinks to the middle. This must be
+  // tested BEFORE the two-lap gate: drag caps total sweep at roughly v0/5.4
+  // radians, so below ~72 entry speed a ball can never reach two laps at all,
+  // and gating the floor behind laps froze it dead at the centre forever with
+  // no score, no drain and no way out but a reload. The age cap is a hard
+  // backstop so no future tuning can reintroduce a permanent park.
+  if (bw.floor && (q.v < 110 || q.age > 12)) { bowlExit(b, bw, bw.floor); return; }
+  // Two full laps before any CHUTE can claim it, so every entry is something
+  // you watch rather than a number that appears. Safe to delay: which chute
+  // fires is decided by r0 and the outermost is tested first, so the extra
+  // laps cannot demote a ball to a lower chute.
+  if (q.swept < Math.PI * 4) return;
+  for (const c of bw.chutes) {
+    // Caught when the orbit it can still hold has decayed to this chute's
+    // level, and only if it entered riding ABOVE that level. A ball that was
+    // never out this far dives straight past on its way to the middle --- which
+    // is what makes plunge strength, not luck, pick the chute.
+    if (q.r0 > c.r && rEq <= c.r) { bowlExit(b, bw, c); return; }
+  }
+  if (bw.floor && (q.r <= bw.r * 0.14 || q.v < 70)) bowlExit(b, bw, bw.floor);
+}
+let RAMPS = [];
+function buildRamps() {
+  RAMPS = (GEO.ramps || []).map((r, id) => {
+    const pts = r.path.map(p => ({ x: p[0], y: p[1], z: p[2] || 0 }));
+    const seg = []; let len = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], c = pts[i + 1];
+      const dx = c.x - a.x, dy = c.y - a.y, dz = c.z - a.z;
+      const L = Math.hypot(dx, dy, dz) || 1e-6;
+      seg.push({ s0: len, L, tx: dx / L, ty: dy / L, tz: dz / L, a });
+      len += L;
+    }
+    // EXIT HOLES along a ramp (the spiral). `at` is given as a fraction of the
+    // path so holes can be placed by feel and survive the path being retuned;
+    // stored as absolute arc length. Each hole has its own exit point and
+    // launch velocity, so WHICH hole you drop out of decides where you land.
+    const holes = (r.holes || []).map(h => ({ ...h, at: h.at * len }))
+                                 .sort((a, b) => a.at - b.at);
+    const out = { id, name: r.name || ('Ramp' + id), pts, seg, len, value: r.value, holes,
+      feeds: r.feeds ?? null, gatedBy: r.gatedBy ?? null,
+      mouth: r.mouth ?? 30, minSpeed: r.minSpeed ?? 900, cone: r.cone ?? 0.55 };
+    // A gated ramp has a DROP GATE across its mouth: a real wall while the bank
+    // stands (Ian, 2026-09-12: "does the red gate physically block balls?" ---
+    // it did not; now it does), gone once the bank is swept. Sits 12 units
+    // before the mouth, spans 95% of the mouth width. render25 draws this
+    // same segment, so what you see is what the ball hits.
+    if (out.gatedBy != null) {
+      const t = seg[0], gs = r.gate || {}, ang = Math.atan2(t.ty, t.tx) + (gs.angle || 0) * Math.PI / 180;
+      const px = -Math.sin(ang), py = Math.cos(ang), gx = pts[0].x - t.tx * 12, gy = pts[0].y - t.ty * 12, h = out.mouth * 0.95;
+      out.gate = { x1: gx + px * h, y1: gy + py * h, x2: gx - px * h, y2: gy - py * h, e: gs.e ?? 0.4, th: 5 };
+    }
+    return out;
+  });
+}
+function rampAt(r, s) {
+  s = Math.max(0, Math.min(r.len, s));
+  let g = r.seg[r.seg.length - 1];
+  for (const q of r.seg) if (s <= q.s0 + q.L) { g = q; break; }
+  const d = s - g.s0;
+  return { x: g.a.x + g.tx * d, y: g.a.y + g.ty * d, z: g.a.z + g.tz * d,
+    tx: g.tx, ty: g.ty, tz: g.tz };
+}
+function rampRelease(b, r, s, v) {
+  const q = rampAt(r, s);
+  b.x = q.x; b.y = q.y; b.z = q.z;
+  b.vx = v * q.tx; b.vy = v * q.ty; b.vz = v * q.tz;
+  b.ramp = null;
+}
+// Drop out of a spiral hole: land at that hole's own exit point, with its own
+// launch velocity, and pay its own award.
+function rampHole(b, r, h) {
+  b.ramp = null; b.z = 0; b.vz = 0;
+  b.x = h.exit[0]; b.y = h.exit[1]; b.vx = h.exit[2]; b.vy = h.exit[3];
+  if (h.value) { award(h.value); snd.award(); }
+  flash((h.label || 'HOLE') + ' — ' + (h.value || 0).toLocaleString());
+}
+function stepRamp(b) {
+  const r = RAMPS[b.ramp.id];
+  const q = rampAt(r, b.ramp.s);
+  const prevV = b.ramp.v;
+  b.ramp.v += (GRAV * q.ty - RAMP_CLIMB * q.tz) * H;
+  b.ramp.s += b.ramp.v * H;
+  // --- SPIRAL EXITS ---
+  // Climb until you run out of speed, then fall out of the last hole you got
+  // past. Rip it too hard and you sail to the top and out the far one. This is
+  // what makes plunge strength a real instrument: the scoring curve peaks in
+  // the MIDDLE, so neither a weak pull nor a full rip is the right answer.
+  if (r.holes && r.holes.length) {
+    if (b.ramp.s >= r.len) { rampHole(b, r, r.holes[r.holes.length - 1]); return; }
+    if (b.ramp.v <= 0 && prevV > 0) {
+      let hit = null;
+      for (const h of r.holes) if (h.at <= b.ramp.s) hit = h;
+      if (hit) { rampHole(b, r, hit); return; }
+      // stalled before even the first hole — slides back out the entrance
+      // below, which is a plain missed plunge and costs nothing
+    }
+  }
+  // ran out of speed climbing and slid back out the mouth — correct pinball
+  // behaviour, not a failure
+  if (b.ramp.s <= 0) { rampRelease(b, r, 0, b.ramp.v); return; }
+  // COMPLETED the ramp — it has to actually pay, or a ramp is just scenery.
+  // (The previous rebuild had two ramps that scored nothing and returned
+  // nowhere, and nothing in the code noticed.)
+  // Reached the top of the feed lane: hand the ball to the funnel at the rim,
+  // carrying the speed it arrived with. That speed is the whole input to the
+  // mechanic, so capture it BEFORE rampRelease clears the rail state.
+  if (b.ramp.s >= r.len && r.feeds != null && BOWLS[r.feeds]) {
+    const vIn = b.ramp.v;
+    rampRelease(b, r, r.len, vIn);
+    bowlEnter(b, BOWLS[r.feeds], vIn);
+    return;
+  }
+  if (b.ramp.s >= r.len) {
+    const val = r.value ?? 2000;
+    award(val); R.bonus += 100; snd.award();
+    flash(r.name.toUpperCase() + ' — ' + val.toLocaleString());
+    rampRelease(b, r, r.len, b.ramp.v); return;
+  }
+  const p = rampAt(r, b.ramp.s);
+  b.x = p.x; b.y = p.y; b.z = p.z;
+  b.vx = b.ramp.v * p.tx; b.vy = b.ramp.v * p.ty; b.vz = b.ramp.v * p.tz;
+}
+function stepAir(b) {
+  b.vy += GRAV * H;
+  b.vz -= RAMP_CLIMB * H;
+  b.x += b.vx * H; b.y += b.vy * H; b.z += b.vz * H;
+  if (DECKS.length && deckLanding(b)) return;   // settled onto a raised deck
+  if (b.z <= 0) { b.z = 0; b.vz = 0; }
+}
+// Capture needs proximity, speed, AND travel roughly along the ramp. Too slow
+// simply passes by — a ball must never stick at a ramp mouth.
+function rampEntry(b) {
+  for (const r of RAMPS) {
+    const m = r.pts[0];
+    const dx = b.x - m.x; if (dx > r.mouth || dx < -r.mouth) continue;
+    const dy = b.y - m.y; if (dy > r.mouth || dy < -r.mouth) continue;
+    if (Math.abs((b.z || 0) - m.z) > 30) continue;   // must be at the mouth's level
+    if (r.gatedBy != null && !S.rampOpen[r.name]) continue;  // bank not swept yet
+    if (dx * dx + dy * dy > r.mouth * r.mouth) continue;
+    const sp2 = b.vx * b.vx + b.vy * b.vy;
+    if (sp2 < r.minSpeed * r.minSpeed) continue;
+    const sp = Math.sqrt(sp2);
+    const t = r.seg[0];
+    if ((b.vx * t.tx + b.vy * t.ty) / sp < r.cone) continue;
+    b.ramp = { id: r.id, s: 0, v: sp };
+    b.z = m.z;
+    return true;
+  }
+  return false;
+}
+
+// ---- DECKS: raised playfields (2026-08-28) ----
+// The capability PinBot needs and we never had. Until now a ball could be in
+// exactly three states — rolling flat on the playfield, locked to a 1D ramp
+// rail, or airborne with no collision at all. A real upper playfield is none
+// of those: it is a REGION at height, with its own walls, where the ball
+// rolls in ordinary 2D. PinBot's UpperPlayfield spans x586-942 / y306-1102 at
+// height 78-82; flattening it (which is what the earlier import did) deletes
+// a third of the machine and leaves an open pocket the ball rattles in.
+//
+// A deck is: { name, z, pts:[[x,y]...] footprint, walls:[{name,pts}] }.
+// On a deck the ball uses the SAME physics as the playfield — same gravity,
+// same collideSeg — just against the deck's own walls, and drawn at height.
+// Leave the footprint and you fall: the ball becomes an ordinary projectile.
+let DECKS = [];
+function buildDecks() {
+  DECKS = (GEO.decks || []).map((d, id) => {
+    const segs = [];
+    for (const w of (d.walls || [])) {
+      const p = w.pts;
+      // `open: true` = a polyline rail, NOT wrapped into a closed polygon.
+      // A deck needs this: its perimeter rail has to have a gap for the ball
+      // to leave by, and wrapping would seal the ball in forever.
+      const n = w.open ? p.length - 1 : p.length;
+      for (let i = 0; i < n; i++) {
+        const a = p[i], b = p[(i + 1) % p.length];
+        if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.5) continue;
+        segs.push({ x1: a[0], y1: a[1], x2: b[0], y2: b[1], e: 0.3 });
+      }
+    }
+    return { id, name: d.name || ('Deck' + id), z: d.z || 60, pts: d.pts, segs,
+      pins: (d.pins || []).map(p => ({ ...p, r: p.r ?? 11, hot: 0 })),
+      holes: (d.holes || []).map(h => ({ ...h, r: h.r ?? 26 })) };
+  });
+}
+function pointInPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+// Rolling on a deck. Identical to the grounded case, against deck walls.
+// A pin is a ROUND bouncer, not a wall segment: the ball scatters off it
+// instead of sliding along it, which is the whole point of a pin field. These
+// are PinBot's little pegs, not full bumpers --- they nudge and score small.
+const PIN_E = 0.62;
+function collidePin(b, p) {
+  let nx = b.x - p.x, ny = b.y - p.y;
+  const d = Math.hypot(nx, ny), rr = BALL_R + p.r;
+  if (d >= rr || d === 0) return;
+  nx /= d; ny /= d;
+  b.x = p.x + nx * rr; b.y = p.y + ny * rr;
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn >= 0) return;
+  b.vx -= (1 + PIN_E) * vn * nx; b.vy -= (1 + PIN_E) * vn * ny;
+  // NO minimum kick here. An earlier version topped a slow ball back up to 260
+  // on every hit, which is perpetual motion --- the ball bounced between the
+  // first two rows forever and never came down. Pins only ever take energy.
+  p.hot = 10; award(p.value ?? 500); snd.peg(-vn);
+}
+function deckHole(b, d, h) {
+  b.deck = null; b.z = 0; b.vz = 0;
+  b.x = h.exit[0]; b.y = h.exit[1]; b.vx = h.exit[2]; b.vy = h.exit[3];
+  // THE START SHOT. Both locks loaded and the play ball down the canopy hole:
+  // this ball stays in play and the two held ones join it.
+  if (R.mbLit) {
+    R.mbLit = false;
+    award(h.value || 0);
+    startMultiball();
+    return;
+  }
+  if (R.superLit) {
+    R.superLit = false;
+    const got = award((h.value || 0) * 3); sample('super-jackpot') || snd.award(); hap(120);
+    flash('SUPER JACKPOT — ' + got.toLocaleString());
+    return;
+  }
+  if (h.value) { award(h.value); sample('canopy-hole') || snd.award(); hap(40); }
+  flash((h.label || 'HOLE') + ' — ' + (h.value || 0).toLocaleString());
+}
+// Rolling drag on a raised deck. The playfield code has none because a ball
+// there is always heading for a flipper or a drain; up here it has to actually
+// SETTLE, or it rattles among the pins indefinitely.
+const DECK_DRAG = 1.2;
+function stepDeck(b) {
+  const d = DECKS[b.deck];
+  b.vy += GRAV * H;
+  b.vx -= b.vx * DECK_DRAG * H; b.vy -= b.vy * DECK_DRAG * H;
+  b.x += b.vx * H; b.y += b.vy * H;
+  for (const s of d.segs) collideSeg(b, s, false, false);
+  for (const p of d.pins) collidePin(b, p);
+  b.z = d.z;
+  // drop through: checked before the rail exit, so the hole wins if the ball
+  // is over it --- the hole is the reward, the rail is the consolation
+  for (const h of d.holes) {
+    if (Math.hypot(b.x - h.x, b.y - h.y) < h.r) { deckHole(b, d, h); return; }
+  }
+  // A ball rolling on the deck can enter an EXIT WIREFORM. Real upper
+  // playfields don't just tip the ball over the side — PinBot rails it down
+  // to the right inlane beside the sling, so a completed deck hands you a
+  // controlled ball. Without this the deck is a shelf you fall off.
+  if (RAMPS.length && rampEntry(b)) { b.deck = null; return; }
+  // rolled off an open edge — hand it to the projectile path and let it fall
+  if (!pointInPoly(b.x, b.y, d.pts)) { b.deck = null; b.vz = 0; }
+  // a deck can still drain if its footprint reaches the bottom of the table
+  if (b.y > GEO.H + 60) b.dead = true;
+}
+// Does a descending airborne ball land ON a deck? This is also how a ramp
+// delivers onto one: the ramp releases, the ball is briefly airborne, and if
+// it is over the footprint at about the right height it settles onto the deck
+// instead of falling all the way to the playfield.
+function deckLanding(b) {
+  for (let i = 0; i < DECKS.length; i++) {
+    const d = DECKS[i];
+    if (b.vz <= 0 && b.z <= d.z && b.z > d.z - 45 && pointInPoly(b.x, b.y, d.pts)) {
+      b.deck = i; b.z = d.z; b.vz = 0; return true;
+    }
+  }
+  return false;
+}
+
+// ---- physics ----
+function collideSeg(b, s, isSling, isDrop) {
+  const dx = s.x2 - s.x1, dy = s.y2 - s.y1, L2 = dx * dx + dy * dy || 1;
+  let t = ((b.x - s.x1) * dx + (b.y - s.y1) * dy) / L2;
+  t = Math.max(0, Math.min(1, t));
+  const px = s.x1 + dx * t, py = s.y1 + dy * t;
+  let nx = b.x - px, ny = b.y - py;
+  const d = Math.hypot(nx, ny);
+  if (d >= BALL_R || d === 0) return false;
+  nx /= d; ny /= d;
+  b.x = px + nx * BALL_R; b.y = py + ny * BALL_R;
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn < 0) {
+    b.vx -= (1 + s.e) * vn * nx; b.vy -= (1 + s.e) * vn * ny;
+    // Coulomb friction: tangential impulse capped by mu * normal impulse (grazing costs ~nothing)
+    const jn = (1 + s.e) * (-vn);
+    const tvx = b.vx - (b.vx * nx + b.vy * ny) * nx, tvy = b.vy - (b.vx * nx + b.vy * ny) * ny;
+    const tv = Math.hypot(tvx, tvy);
+    if (tv > 1e-6) { const jt = Math.min(0.04 * jn, tv); b.vx -= tvx / tv * jt; b.vy -= tvy / tv * jt; }
+    if (isSling && -vn > 120) {
+      b.vx += nx * 900; b.vy += ny * 900;
+      award(SCORE.sling); snd.sling();
+      if (s.si != null) slingHot[s.si] = 8;   // the kick flashes the sling for a few frames
+    } else if (!isSling && !isDrop) snd.wall(-vn);
+  }
+  return true;
+}
+function step(b) {
+  // on a rail, on a raised deck, or airborne after a release
+  if (b.bowl) { stepBowl(b); return; }
+  if (b.ramp) { stepRamp(b); return; }
+  if (b.deck !== null && b.deck !== undefined) { stepDeck(b); return; }
+  if (b.z > 0) { stepAir(b); return; }
+  b.vy += GRAV * H;
+  b.x += b.vx * H; b.y += b.vy * H;
+  for (const s of SEGS) collideSeg(b, s, false, false);
+  for (const r of RAMPS) if (r.gate && !S.rampOpen[r.name]) collideSeg(b, r.gate, false, false);   // shut drop gates
+  // the plunger tip holds the ball up in the lane and drags it down as you pull.
+  // A LAUNCHED ball (vy < -200) is exempt: the tip springs forward at 900/s and
+  // would otherwise shove a weak plunge up the lane for free, changing the
+  // launch energy the vortex bands were measured against.
+  if (b.vy > -200 && b.x > LANE.x0 - 20 && b.x < LANE.x1 + 20 && b.y > 1700) collideSeg(b, plungerSeg(), false, false);
+  // A lock vortex swallows anything that gets inside its rim. The rim is a
+  // full ring of wall with ONE gap, so the only way in is through the
+  // entrance --- that is what makes it a shot you aim rather than a hazard you
+  // fall into. Once you are in, you are in: no chutes, no escape.
+  if (b.noCatch > 0) b.noCatch--;
+  for (const bw of BOWLS) {
+    // a full lock is shut: the chord blocks the mouth and it stops catching
+    if (bw.occupied && bw.gate) { collideSeg(b, bw.gate, false, false); continue; }
+    if (!b.noCatch && bw.catch && Math.hypot(b.x - bw.x, b.y - bw.y) <= bw.r - 15) {
+      bowlEnter(b, bw, Math.hypot(b.vx, b.vy)); return;
+    }
+  }
+  for (const o of GEO.oneway) {
+    if (b.vx * o.nx + b.vy * o.ny < 0) collideSeg(b, o, false, false);
+  }
+  for (const sp of GEO.spinners) {
+    if (sp.cd) { sp.cd--; continue; }
+    const a = sp.rot * Math.PI / 180, hx = Math.cos(a) * sp.len / 2, hy = Math.sin(a) * sp.len / 2;
+    const dx = b.x - sp.x, dy = b.y - sp.y;
+    const t = Math.max(-1, Math.min(1, (dx * hx + dy * hy) / (hx * hx + hy * hy || 1)));
+    if (Math.hypot(dx - t * hx, dy - t * hy) < BALL_R + 4 && Math.hypot(b.vx, b.vy) > 200) {
+      sp.cd = 40; sp.hot = 20; award(S.spinVal); R.bonus += 50; snd.spin();
+    }
+  }
+  if (GEO.loopSensor) {
+    const ls = GEO.loopSensor;
+    if (!ls.cd && Math.abs(b.vx) > 300 && Math.hypot(b.x - ls.x, b.y - ls.y) < ls.r + BALL_R && Math.hypot(b.vx, b.vy) > 600) {
+      ls.cd = 240;
+      // THE loop: the storm ritual. Re-rips extend an active storm; with all three
+      // trials lit it breaks the storm; otherwise it pays the ratcheting loop value.
+      if (R.storm > 0) {
+        R.storm = Math.min(RULES.stormMaxSecs, R.storm + RULES.stormExtend);
+        award(R.loopVal * 2); snd.thunder(); flash('LOOP — STORM HELD!');
+      } else if (trialsLit() === 3) {
+        award(R.loopVal); breakTheStorm();
+      } else {
+        award(R.loopVal); R.bonus += RULES.bonusPerDrop; snd.laneAll(); flash('LOOP — ' + R.loopVal);
+      }
+    }
+    if (ls.cd) ls.cd--;
+  }
+  for (const s of SLINGSEGS) collideSeg(b, s, true, false);
+  for (const sp of GEO.spinners) {
+    const a = sp.rot * Math.PI / 180, hx = Math.cos(a) * sp.len / 2, hy = Math.sin(a) * sp.len / 2;
+    cx.strokeStyle = sp.hot ? '#ffe27a' : '#8fa8c8'; cx.lineWidth = sp.hot ? 9 : 6;
+    if (sp.hot) sp.hot--;
+    cx.beginPath(); cx.moveTo(sp.x - hx, sp.y - hy); cx.lineTo(sp.x + hx, sp.y + hy); cx.stroke();
+  }
+  for (const s of DROPSEGS) {
+    if (!S.drops[s.i]) continue;
+    const wasHit = collideSeg(b, s, false, true);
+    if (wasHit && Math.hypot(b.vx, b.vy) > 250) {
+      S.drops[s.i] = 0; award(SCORE.drop); R.bonus += SCORE.bonusDrop;
+      snd.drop();   // no flash: the target dropping and its dark slot say it
+      if (GEO.drops[s.i].lone) continue;
+      const bank = GEO.drops[s.i].bank || 0;
+      const members = [];
+      for (let j = 0; j < GEO.drops.length; j++) if (!GEO.drops[j].lone && (GEO.drops[j].bank || 0) === bank) members.push(j);
+      if (members.every(j => !S.drops[j])) {
+        // a completed bank lights its storm mark (the trial), and the spinner ramps
+        S.spinVal = Math.min(900, S.spinVal + 200);
+        snd.bank();
+        if (!R.trials[bank]) {
+          R.trials[bank] = 1;
+          award(3000);
+          const n = trialsLit();
+          if (n === 3) { snd.award(); flash('ALL MARKS LIT — LOOP TO BREAK THE STORM'); }
+          else flash(TRIAL_NAMES[bank] + ' LIT — ' + n + ' OF 3');
+        } else {
+          award(1500); flash(TRIAL_NAMES[bank] + ' AGAIN — 1500');
+        }
+        // A swept bank OPENS its ramp. Until then that ramp's mouth simply does
+        // not capture --- the shot is there but the ball rolls straight past it.
+        // Runs LAST so its message is the one the player is left looking at;
+        // the legacy VANE flash above was overwriting it.
+        for (const r of RAMPS) if (r.gatedBy === bank && !S.rampOpen[r.name]) {
+          S.rampOpen[r.name] = true;
+          const got = award(SCORE.bankSwept);
+          sample('bank-swept') || snd.award(); hap(80); flash(r.name.toUpperCase() + ' OPEN — ' + got.toLocaleString());
+        }
+        // The bank does NOT come back. Sweeping it is a one-time unlock: the
+        // canopy entrance stays open for the rest of the game.
+      }
+    }
+  }
+  for (const k of GEO.bumpers) {
+    let nx = b.x - k.x, ny = b.y - k.y;
+    const d = Math.hypot(nx, ny), rr = BALL_R + k.r;
+    if (d >= rr || d === 0) continue;
+    nx /= d; ny /= d;
+    b.x = k.x + nx * rr; b.y = k.y + ny * rr;
+    const vn = b.vx * nx + b.vy * ny;
+    if (vn < 0) { b.vx -= 1.4 * vn * nx; b.vy -= 1.4 * vn * ny; }
+    b.vx += nx * 650; b.vy += ny * 650;
+    award(R.multiball ? SCORE.popMultiball : SCORE.pop); R.bonus += SCORE.bonusPop; k.hot = 6; snd.pop();
+  }
+  // flippers
+  for (const f of GEO.flippers) {
+    const pressed = f.side === 'L' ? S.flipL : S.flipR;
+    const ang = f.side === 'L' ? S.angL : S.angR;
+    const a = (f.start + (f.endA - f.start) * ang) * Math.PI / 180;
+    const tx = f.x + f.len * Math.sin(a), ty = f.y - f.len * Math.cos(a);
+    const dx = tx - f.x, dy = ty - f.y, L2 = dx * dx + dy * dy;
+    let t = ((b.x - f.x) * dx + (b.y - f.y) * dy) / L2;
+    t = Math.max(0, Math.min(1, t));
+    const px = f.x + dx * t, py = f.y + dy * t;
+    let nx = b.x - px, ny = b.y - py;
+    const d = Math.hypot(nx, ny), rr = BALL_R + f.base - (f.base - f.end) * t;
+    if (d >= rr || d === 0) continue;
+    nx /= d; ny /= d;
+    b.x = px + nx * rr; b.y = py + ny * rr;
+    const om = (f.side === 'L' ? 1 : -1) * (pressed && ang < 1 ? -46 : (!pressed && ang > 0 ? 20 : 0));
+    const sx = -om * (py - f.y), sy = om * (px - f.x);
+    const rvx = b.vx - sx, rvy = b.vy - sy;
+    const vn = rvx * nx + rvy * ny;
+    if (vn < 0) {
+      b.vx -= 1.85 * vn * nx; b.vy -= 1.85 * vn * ny;
+      // rubber friction (mu 0.9, from Flash flipper params) vs blade surface velocity -> cradling works
+      // ...but ONLY against a MOVING blade. Applied every substep to a blade at
+      // rest, 0.9 x the restitution-inflated normal impulse out-pulls gravity
+      // along the blade on any slope under ~59deg, so the ball was pinned to a
+      // resting flipper: measured 2px of travel in 2s on the 39deg rest slope
+      // (Ian, 2026-09-11: "too sticky... stuck to the flipper"). A ball on a
+      // still blade rolls, and rolling costs what it costs on the walls (0.04).
+      const jn = 1.85 * (-vn);
+      const rtx = (b.vx - sx) - ((b.vx - sx) * nx + (b.vy - sy) * ny) * nx;
+      const rty = (b.vy - sy) - ((b.vx - sx) * nx + (b.vy - sy) * ny) * ny;
+      const rt = Math.hypot(rtx, rty);
+      const mu = om ? 0.9 : 0.04;
+      if (rt > 1e-6) { const jt = Math.min(mu * jn, rt); b.vx -= rtx / rt * jt; b.vy -= rty / rt * jt; }
+      // physical cap: flipper exit never exceeds plunge class (measured: 40 vs 42 VPX units)
+      const sp = Math.hypot(b.vx, b.vy);
+      if (sp > 2800) { b.vx *= 2800 / sp; b.vy *= 2800 / sp; }
+    }
+  }
+  // lanes
+  if (R.faceLit) for (let i = 0; i < GEO.eyes.length; i++) {
+    const ey = GEO.eyes[i];
+    if (!R.eyes[i] && Math.hypot(b.x - ey.x, b.y - ey.y) < (ey.r || 40)) {
+      R.eyes[i] = 1; sample('eye') || snd.thunder(); hap(70);
+      if (R.eyes.every(v => v)) {
+        // Both eyes: THE MOUTH OPENS (Ian, 2026-09-11 --- the old table's
+        // signature mechanism, brought back as the finale). The storm does not
+        // break until the giant is fed. Like the eyes, the mouth is a trigger
+        // region with no hardware, so the face rule holds.
+        R.mouthOpen = true; sample('storm-level', 0.9); hap(100);
+        flash('THE MOUTH OPENS — FEED THE GIANT');
+      } else flash('EYE — ' + (i ? 'ONE' : 'ONE') + ' MORE');
+    }
+  }
+  // THE MOUTH SWALLOWS THE BALL: held at the teeth, then delivered up the
+  // right inlane by subway (see build-3tables.mjs), and the storm breaks. Scales with level like
+  // everything else, so at level 3 this is the biggest single award on the
+  // table. Then the whole loop starts again from level 1.
+  const mo = GEO.mouth;
+  if (mo && R.mouthOpen && !b.mouthHeld && Math.hypot(b.x - mo.x, b.y - mo.y) < mo.r) {
+    // the mouth shuts the moment it takes a ball (critic 2026-09-12: left open
+    // through the hold, a second multiball ball arriving inside 0.23 s was
+    // swallowed too and the finale paid twice)
+    R.mouthOpen = false;
+    b.mouthHeld = mo.hold * SUB; b.x = mo.x; b.y = mo.y; b.vx = 0; b.vy = 0;
+    sample('canopy-hole') || snd.saucer(); hap(60);
+    flash('THE GIANT FEEDS');
+  }
+  if (b.mouthHeld) {
+    b.mouthHeld--; b.x = mo.x; b.y = mo.y; b.vx = 0; b.vy = 0;
+    if (!b.mouthHeld) {
+      b.x = mo.exit[0]; b.y = mo.exit[1]; b.vx = mo.exit[2]; b.vy = mo.exit[3];   // up the right inlane
+      const got = award(1000000); sample('storm-breaks') || snd.storm(); hap(180);
+      flash('THE STORM BREAKS — ' + got.toLocaleString());
+      R.mouthOpen = false; R.faceLit = false; R.eyes = [0, 0]; R.mbCount = 0; R.level = 1;
+      // balls locked while the giant was lit could not arm at level 3; at level 1 they can (critic 2026-09-12)
+      if (R.locks >= LOCKS_FOR_MULTIBALL && !R.mbLit) armMultiball();
+    }
+    return;
+  }
+  for (let i = 0; i < GEO.lanes.length; i++) {
+    const l = GEO.lanes[i];
+    if (!S.lanes[i] && Math.hypot(b.x - l.x, b.y - l.y) < 32) {
+      S.lanes[i] = 1; award(SCORE.lane); R.bonus += SCORE.bonusLane; snd.lane();   // no flash: the ring lights
+      if (S.lanes.every(v => v)) {
+        // all three top lanes advance the bonus multiplier (era law)
+        award(SCORE.lanesAll);
+        if (R.bonusMult < RULES.bonusMultMax) { R.bonusMult++; flash('BONUS ' + R.bonusMult + 'X'); }
+        snd.laneAll();
+        if (!R.multiball) {
+          R.setDone = true;
+          if (R.locks >= LOCKS_FOR_MULTIBALL && !R.mbLit) armMultiball();
+        }
+        setTimeout(() => { S.lanes = GEO.lanes.map(() => 0); }, 900);
+      }
+    }
+  }
+  // saucer
+  const sc = GEO.saucer;
+  if (b.noSauce) b.noSauce--;
+  // Capture speed is per-saucer now. 700 was hardcoded for the old CROWN
+  // saucer, where a fast loop is meant to sail over the hole — correct there.
+  // A centre scoop is the opposite case: you cannot reach mid-table from a
+  // flipper arriving slower than ~1500, so a 700 cap makes it uncatchable
+  // from either flipper at any power (harness-caught on table T).
+  const grabSpeed = sc && sc.grab ? sc.grab : 700;
+  if (sc && !b.held && !b.noSauce && Math.hypot(b.x - sc.x, b.y - sc.y) < sc.r + 6 && Math.hypot(b.vx, b.vy) < grabSpeed) {
+    b.held = 60 * SUB;
+    b.x = sc.x; b.y = sc.y; b.vx = 0; b.vy = 0;
+    snd.saucer();
+    if (R.storm > 0) {
+      // the offering, made while the storm is broken: jackpot, and it keeps climbing
+      const paid = R.jackpot;
+      award(paid); R.jackpot += RULES.jackpotStep;
+      snd.award(); flash('JACKPOT — ' + paid.toLocaleString());
+    } else {
+      award(750); R.bonus += 150; flash('SAUCER — 750');
+    }
+  }
+  if (b.held) {
+    b.held--;
+    b.x = sc.x; b.y = sc.y; b.vx = 0; b.vy = 0;
+    if (!b.held) { b.vx = sc.ex ?? -520; b.vy = sc.ey ?? 260; b.noSauce = 100 * SUB; }
+    return;
+  }
+  // drain
+  // ramp capture last, after every playfield interaction has resolved, and
+  // guarded so it costs nothing on a table with no ramps defined
+  if (RAMPS.length) rampEntry(b);
+  if (Math.hypot(b.x - GEO.drain.x, b.y - GEO.drain.y) < 45 || b.y > GEO.H - 30) { b.dead = true; }
+  if (b.y > GEO.H + 60) b.dead = true;
+}
+
+function flash(m, hold) { S.msg = m; S.msgT = hold ?? 600; }
+// What to do next, for the HUD strip. The lamps show it on the playfield; this
+// is the one line of words for a phone player who has not learnt the lamps yet.
+// Replaces the instructional flashes (2026-09-12), which fought the score ones.
+function hudHint() {
+  if (S.over) return '';
+  if (R.mouthOpen) return 'FEED THE GIANT';
+  if (R.faceLit) return 'SHOOT THE EYES';
+  if (R.multiball) return R.superLit ? 'SUPER JACKPOT — CANOPY' : 'LOCKS PAY JACKPOTS';
+  const shut = RAMPS.some(r => r.gatedBy != null && !S.rampOpen[r.name]);
+  if (R.mbLit) return shut ? 'SWEEP THE BANK' : 'CANOPY STARTS MULTIBALL';   // critic: it said CANOPY with the gate shut
+  if (R.locks >= LOCKS_FOR_MULTIBALL && !R.setDone && R.level > 1) return 'COMPLETE THE ROLLOVERS';
+  if (R.locks < LOCKS_FOR_MULTIBALL) { const n = LOCKS_FOR_MULTIBALL - R.locks; return 'LOCK ' + n + (n === 1 ? ' MORE BALL' : ' BALLS'); }
+  return shut ? 'SWEEP THE BANK' : 'SHOOT THE CANOPY';
+}
+
+function serve() {
+  for (let i = 0; i < (GEO ? GEO.drops.length : 0); i++) if (GEO.drops[i].lone) S.drops[i] = 1;
+  S.servePending = false;
+  S.balls = [{ x: GEO.serve.x, y: GEO.serve.y, vx: 0, vy: 20, held: 0, z: 0, vz: 0, ramp: null, deck: null }];
+  S.plungePull = 0; S.plunged = false;
+  S.tilt = false; S.nudgeWarn = 0;
+  rulesResetBall();
+}
+
+// ---- THE PLUNGER (physical, ported from the art build 2026-09-11) ----
+// The ball rests ON THE PLUNGER TIP, not on the cabinet floor --- which is how
+// a real machine works. The tip is a live collider: drawing the plunger back
+// visibly drags the ball down the lane with it, and the Feed ramp mouth sits
+// just above the rest position to take the ball the moment it launches.
+// Travel is bounded by the spring's solid height (see render25.js HOUSING).
+const LANE = { x0: 868, x1: 926, cx: 897, botY: 1976 };
+const PLUNGER = { restY: 1790, travel: 70, tipY: 1790 };
+function plungerUpdate(dt) {
+  const target = PLUNGER.restY + Math.min(1, S.plungePull) * PLUNGER.travel;
+  // follows the pull exactly on the way back; springs forward under its own power
+  if (target >= PLUNGER.tipY) PLUNGER.tipY = target;
+  else PLUNGER.tipY = Math.max(target, PLUNGER.tipY - 900 * dt);
+}
+function plungerSeg() {
+  return { x1: LANE.x0 + 3, y1: PLUNGER.tipY, x2: LANE.x1 - 3, y2: PLUNGER.tipY, e: 0.05 };
+}
+
+// ---- input: zero-frame latency ----
+function releasePlunger() {
+  S.plunging = false;
+  const b = S.balls[0];
+  if (b && b.y > GEO.H - 900 && b.x > GEO.W - 130) {
+    b.vy = -(600 + 3200 * Math.min(1, S.plungePull));
+    S.plunged = true; S.plungeCount = (S.plungeCount || 0) + 1;
+    snd.plunge ? snd.plunge() : blip(100 + 200 * S.plungePull, 0.15, 'sawtooth', 0.09);
+  }
+  S.plungePull = 0;
+}
+addEventListener('keydown', (e) => {
+  if (AC.state === 'suspended') AC.resume();
+  if (e.repeat) return;
+  if (e.code === 'KeyZ' || e.code === 'ShiftLeft') { if (!S.tilt) { S.flipL = true; snd.flip(); } }
+  if (e.code === 'Slash' || e.code === 'ShiftRight') { if (!S.tilt) { S.flipR = true; snd.flip(); } }
+  if (e.code === 'Space') { S.plunging = true; e.preventDefault(); }
+  if (e.code === 'KeyN' && !S.balls.length && !S.servePending) newBall();
+  if (e.code === 'KeyV') { VIEW25 = !VIEW25; if (VIEW25) r25init(); sizeCanvas(); }
+  if (e.code === 'KeyM') musicSetOn(!MUSIC.on);
+  if (e.code === 'KeyX' && typeof FX !== 'undefined') { FX.low = !FX.low; R25.SS = FX.low ? 1 : 1.5; if (R25.ready) buildStaticLayer(); sizeCanvas(); flash('FX ' + (FX.low ? 'LOW' : 'HIGH'), 150); }
+  if (e.code === 'KeyF' && typeof FRAME !== 'undefined') { FRAME.enabled = !FRAME.enabled; flash('FRAMING ' + (FRAME.enabled ? 'CLOSE/FULL' : 'FULL ONLY'), 150); }
+});
+addEventListener('keyup', (e) => {
+  if ((e.code === 'KeyZ' || e.code === 'ShiftLeft') && S.flipL) snd.flipRelease();
+  if ((e.code === 'Slash' || e.code === 'ShiftRight') && S.flipR) snd.flipRelease();
+  if (e.code === 'KeyZ' || e.code === 'ShiftLeft') S.flipL = false;
+  if (e.code === 'Slash' || e.code === 'ShiftRight') S.flipR = false;
+  if (e.code === 'Space') releasePlunger();
+});
+
+// ---- touch input (M2): screen halves = flippers, shooter-lane strip = plunger
+// (hold to pull, release to fire), quick swipe in the upper field = nudge.
+// Three nudge warnings inside 4s = TILT (flippers dead until next ball).
+S.tilt = false; S.nudgeWarn = 0;
+const touchRoles = new Map();
+let lastNudge = 0;
+function touchZone(t) {
+  const r = cv.getBoundingClientRect();
+  const x = (t.clientX - r.left) / r.width, y = (t.clientY - r.top) / r.height;
+  // the music note in the 2.5D HUD strip (render25 MUSBTN), checked first so the
+  // plunger strip / flipper halves don't swallow it
+  if (VIEW25 && R25.ready && Math.abs(x * R25.CW - MUSBTN.x) < MUSBTN.r + 14 && Math.abs(y * R25.CH - MUSBTN.y) < MUSBTN.r + 14) return 'M';
+  // the plunger strip is the shooter lane only: right edge, lower half of the
+  // TABLE. Below the table (the phone's control bar) and in the lower corners
+  // the whole width is flippers (Ian, 2026-09-13: the right flipper button sat
+  // inside the plunger strip and would not flip)
+  const tableBottom = (VIEW25 && R25.ready && typeof LAYOUT !== 'undefined') ? (R25.CH - LAYOUT.bottom) / R25.CH : 1;
+  if (x > 0.86 && y > 0.45 && y < tableBottom - 0.02) return 'P';
+  if (y < 0.38) return 'N';              // upper field: nudge swipes
+  return x < 0.5 ? 'L' : 'R';
+}
+addEventListener('touchstart', (e) => {
+  if (AC.state === 'suspended') AC.resume();
+  // full screen on the first touch (Android Chrome allows it from a gesture); harmless where it is refused
+  if (!S.fsTried) { S.fsTried = true; const el = document.documentElement; if (el.requestFullscreen) el.requestFullscreen().catch(() => {}); }
+  if (!S.balls.length && !S.servePending) newBall();   // a lock/drain has a serve on the way: do not add a second
+  for (const t of e.changedTouches) {
+    const z = touchZone(t);
+    touchRoles.set(t.identifier, { z, x: t.clientX, y: t.clientY, t0: performance.now() });
+    if (z === 'M') { musicSetOn(!MUSIC.on); hap(12); continue; }
+    if (S.tilt) continue;
+    if (z === 'L') { S.flipL = true; snd.flip(); hap(8); }
+    if (z === 'R') { S.flipR = true; snd.flip(); hap(8); }
+    if (z === 'P') S.plunging = true;
+  }
+  e.preventDefault();
+}, { passive: false });
+addEventListener('touchmove', (e) => {
+  for (const t of e.changedTouches) {
+    const o = touchRoles.get(t.identifier);
+    if (!o || o.z !== 'N' || S.tilt) continue;
+    const dx = t.clientX - o.x, dy = t.clientY - o.y, dt = performance.now() - o.t0;
+    const d = Math.hypot(dx, dy);
+    if (dt < 220 && d > 26 && performance.now() - lastNudge > 300) {
+      lastNudge = performance.now();
+      for (const b of S.balls) { b.vx += dx / d * 240; b.vy += dy / d * 240; }
+      S.nudgeWarn++; hap(20); blip(120, 0.06, 'square', 0.06);
+      flash(S.nudgeWarn >= 3 ? 'TILT' : 'NUDGE');
+      setTimeout(() => { S.nudgeWarn = Math.max(0, S.nudgeWarn - 1); }, 4000);
+      if (S.nudgeWarn >= 3) { S.tilt = true; S.flipL = S.flipR = false; sample('tilt'); hap(200); }
+      o.z = 'spent';
+    }
+  }
+  e.preventDefault();
+}, { passive: false });
+addEventListener('touchend', (e) => {
+  for (const t of e.changedTouches) {
+    const o = touchRoles.get(t.identifier);
+    touchRoles.delete(t.identifier);
+    if (!o) continue;
+    if (o.z === 'L') { if (S.flipL) snd.flipRelease(); S.flipL = false; }
+    if (o.z === 'R') { if (S.flipR) snd.flipRelease(); S.flipR = false; }
+    if (o.z === 'P') releasePlunger();
+  }
+});
+
+// Add a ball at the plunger without disturbing any already in play --- serve()
+// replaces the whole array, which would destroy a ball during multiball.
+// MULTIBALL. Both locks full -> each vortex gives its ball back, plus a fresh
+// one, so you play three. The held balls are dropped at their vortex centre
+// with a nudge downward: the rim's only gap faces the flippers, so they spiral
+// out the way they came in rather than being teleported somewhere arbitrary.
+function armMultiball() {
+  R.mbLit = true;
+  snd.award(); flash('MULTIBALL LIT');
+}
+function startMultiball() {
+  R.locks = 0; R.mbJack = {}; R.mbJackVal = 100000; R.superLit = false; R.mbLit = false;
+  R.setDone = false;
+  let released = 0;
+  for (const bw of BOWLS) {
+    if (!bw.lock || !bw.occupied) continue;
+    bw.occupied = false; released++;
+    // noCatch: a ball dropped at the vortex centre sits INSIDE the catch
+    // radius, so without this it is re-swallowed by the lock it just came out
+    // of on the very next frame. The grace lets it fall clear through the gap.
+    S.balls.push({ x: bw.x, y: bw.y, z: 0, vx: (released % 2 ? -90 : 90), vy: 260,
+                   held: 0, vz: 0, ramp: null, deck: null, bowl: null, noCatch: 150 });
+  }
+  // Only top up if nothing is in play. When multiball is started off the canopy
+  // hole the ball that made the shot is still out, so a third would be wrong.
+  if (!S.balls.length) serveBall();
+  R.multiball = S.balls.length;
+  sample('multiball') || snd.award(); hap(120); flash('MULTIBALL — ' + S.balls.length + ' BALLS');
+}
+function serveBall() {
+  S.servePending = false;
+  S.balls.push({ x: GEO.serve.x, y: GEO.serve.y, vx: 0, vy: 20, held: 0,
+                 z: 0, vz: 0, ramp: null, deck: null, bowl: null });
+  S.plungePull = 0; S.plunged = false;
+}
+function newBall() {
+  if (S.over) {
+    S.score = 0; S.ballsLeft = 3; S.over = false; S.drops = GEO.drops.map(() => 1);
+    S.lanes = GEO.lanes.map(() => 0); S.saucerLit = false; S.bankDone = {}; S.spinVal = 100; S.plungeCount = 0;
+    rulesResetGame();
+    snd.credit();   // the credit bell of a 1963 Slick Chick: a new game
+  }
+  rulesResetBall();
+  serve(); flash('BALL ' + (4 - S.ballsLeft));
+}
+
+// ---- fixed-timestep loop (rAF when visible, interval fallback hidden) ----
+let acc = 0, last = performance.now();
+// sling hit-flash: set by collideSeg on a kick, decremented per rendered frame
+// so the flash reads as a few frames long regardless of the physics rate
+let slingHot = [0, 0];
+function frame() {
+  requestAnimationFrame(frame);
+  for (let i = 0; i < slingHot.length; i++) if (slingHot[i] > 0) slingHot[i]--;
+  musicEnsure();
+  render();
+}
+setInterval(() => tick(performance.now()), 8);
+function tick(now) {
+  // the interval starts before the geometry fetch resolves; this predates every
+  // table and threw three times on every boot for weeks
+  if (!GEO) { last = now; return; }
+  acc += Math.min(50, now - last); last = now;
+  const dt = 1000 / FPS;
+  while (acc >= dt) {
+    acc -= dt;
+    // flipper angles
+    S.angL = Math.max(0, Math.min(1, S.angL + (S.flipL ? 0.15 : -0.08)));
+    S.angR = Math.max(0, Math.min(1, S.angR + (S.flipR ? 0.15 : -0.08)));
+    if (S.plunging) S.plungePull = Math.min(1, S.plungePull + 0.0035);
+    plungerUpdate(1 / FPS);
+    // THE MACHINE'S OWN VIBRATION (critic 2026-09-12): a ball can balance dead
+    // still on the apex of a sling or the tip of an inlane guide, 25 above the
+    // point, where no flip reaches it --- 6 of 91 soak balls ended the game
+    // that way. A real cabinet never holds a ball on a knife edge; after 0.75 s
+    // motionless on open playfield it gets a tiny sideways shove. Exempt: the
+    // plunger tip, a cradle on a held flipper, and a ball the mouth is holding.
+    for (const b of S.balls) {
+      const grounded = !b.ramp && !b.bowl && (b.deck == null) && !(b.z > 0) && !b.mouthHeld && !b.held;
+      const still = grounded && Math.hypot(b.vx, b.vy) < 3;
+      b.still = still ? (b.still || 0) + 1 : 0;
+      if (b.still < 180) continue;
+      const inLane = b.x > GEO.W - 130 && b.y > GEO.H - 900;
+      const cradled = GEO.flippers.some(f => (f.side === 'L' ? S.flipL : S.flipR) && Math.hypot(b.x - f.x, b.y - f.y) < 160);
+      if (inLane || cradled) { b.still = 0; continue; }
+      b.vx += (Math.random() < 0.5 ? -1 : 1) * 90; b.vy -= 40; b.still = 0;
+    }
+    // SHORT PLUNGE (critic 2026-09-12): under ~0.525 pull the ball stalls on
+    // the Feed rail, slides back out of the mouth and settles on the tip. Say
+    // so, so it reads as a dud plunge and not a bug; the bands are Ian's and
+    // stay where they are.
+    if (S.plunged && !S.plunging) {
+      const b = S.balls[0];
+      if (b && S.balls.length === 1 && !b.ramp && b.x > GEO.W - 130 && b.y > 1740 && Math.abs(b.vy) < 20) {
+        S.plunged = false; flash('SHORT — PLUNGE AGAIN', 200); snd.gateDown();
+      }
+    }
+    for (let i = 0; i < SUB; i++) for (const b of S.balls) if (!b.dead) step(b);
+    // A locked ball is held by a vortex, not drained: it costs no ball and a
+    // replacement is served so play continues. What happens when both locks
+    // are full is the multiball rule, which is Ian's next step --- this counts
+    // them and holds them, and deliberately does not invent the release.
+    for (const b of S.balls) if (b.locked) {
+      S.balls = S.balls.filter(x => x !== b);
+      R.locks++;
+      // Both locks full ARMS multiball; it does not start it. The ball in play
+      // then has to be put down the canopy jackpot, which is what starts it.
+      // That gives the canopy a reason to exist --- the critic measured zero
+      // canopy entries across fifty balls because nothing required it.
+      if (R.locks >= LOCKS_FOR_MULTIBALL && !R.mbLit) {
+        // level 1 arms on the locks alone; from level 2 the rollover set has to
+        // be completed as well --- same hardware, one more thing to do
+        if (R.level === 1 || R.setDone) armMultiball();
+        // else: the HUD hint says COMPLETE THE ROLLOVERS
+      }
+      if (!S.balls.length) { S.servePending = true; setTimeout(serveBall, 900); }
+    }
+    for (const b of S.balls) if (b.dead) {
+      S.balls = S.balls.filter(x => x !== b);
+      snd.drain();
+      // Multiball: losing one ball of several costs you nothing. You only lose
+      // a ball when the LAST one on the playfield drains. Without this a
+      // 3-ball multiball would eat your whole game in seconds.
+      if (S.balls.length > 0) {
+        if (R.multiball && S.balls.length === 1) {
+          R.multiball = 0; R.superLit = false; R.mbJack = {}; R.setDone = false;
+          R.mbCount++;
+          R.level = Math.min(3, R.mbCount + 1);
+          if (R.mbCount >= 3 && !R.faceLit) {
+            // the third storm is over: the giant himself is the shot now
+            R.faceLit = true; R.eyes = [0, 0];
+            sample('storm-level') || snd.thunder(); hap(100); flash('THE STORM GIANT — SHOOT THE EYES');
+          } else { sample('storm-level', 0.8); flash('MULTIBALL OVER — STORM LEVEL ' + R.level); }
+        }
+        continue;
+      }
+      R.multiball = 0;
+      S.ballsLeft--;
+      // the storm doesn't survive a drained ball (era law: timed modes end at drain);
+      // whatever the ball earned this trip is counted onto the score before the flash
+      if (R.storm > 0) endStorm();
+      const payout = Math.round(R.bonus * R.bonusMult);
+      if (payout > 0) { R.bonusPayout = payout; flash('BONUS ' + payout.toLocaleString() + (R.bonusMult > 1 ? ' (' + R.bonusMult + 'X)' : '')); }
+      if (S.ballsLeft > 0) { S.servePending = true; setTimeout(serve, 900); if (!payout) flash('BALL LOST'); }
+      else { S.over = true; if (!payout) flash('GAME OVER — N for new game'); }
+    }
+    // end-of-ball bonus count-up: drains fast (well under the 900ms serve delay)
+    if (R.bonusPayout > 0) {
+      const chunk = Math.max(50, Math.round(R.bonusPayout / 16));
+      const add = Math.min(chunk, R.bonusPayout);
+      S.score += add; R.bonusPayout -= add;
+      if (R.bonusPayout > 0) snd.bonusTick();
+      else if (S.over) flash('GAME OVER — N for new game');
+    }
+    // THE STORM BREAKS timer (real elapsed time, immune to frame drops via acc/dt)
+    if (R.storm > 0) { R.storm -= dt / 1000; if (R.storm <= 0) endStorm(); }
+    if (S.msgT > 0) S.msgT--;
+    for (const k of GEO.bumpers) if (k.hot) k.hot--;
+  }
+}
+
+// ---- render ----
+const cv = document.getElementById('c'), cx = cv.getContext('2d');
+const cvStatic = document.getElementById('cs'), stage = document.getElementById('stage');
+let SC = 0.45;
+// The printed playfield, drawn dimmed UNDER the greybox shapes. This exists so
+// layout is judged against the real art from the first frame — the previous
+// rebuild was validated against a stale print (thunderhead-master.png) and every
+// "clears the face" check was therefore meaningless. ?art=0 turns it off.
+const ART = new Image(); let ARTOK = false;
+ART.onload = () => { ARTOK = true; if (typeof r25artArrived === 'function') r25artArrived(); };
+ART.src = 'pick-17-assembled.webp'   // web build: 9.0MB PNG -> 777KB WebP, same 1429x2965;
+const SHOW_ART = new URLSearchParams(location.search).get('art') !== '0';
+// 2.5D VIEW. ?view=25d or press V. The flat greybox stays the default because
+// it is where geometry changes are cheap to see; the raised camera is the
+// same table drawn from render25.js, physics untouched.
+// WEB BUILD: the finished 2.5D view is the DEFAULT. In the greybox repo the
+// flat wireframe view leads because that is where geometry changes are cheap to
+// see; on a public page it is the developer's view and shows z-labels, the
+// sacred circle and every rail outline. ?view=greybox still gets it back.
+let VIEW25 = new URLSearchParams(location.search).get('view') !== 'greybox';
+// SACRED = the god's face + beard taper. Hardware must NEVER cross this.
+// His cloud-hair and the background clouds ARE fair game (Ian, 2026-08-28) —
+// without that the band y320-830 has no free corridor at all and the whole
+// middle third of the table is unbuildable.
+const SACRED_FACE = { x: 465, y: 528, r: 245 };
+const SACRED_BEARD = [[300,700],[640,700],[625,800],[600,880],[555,960],[500,1035],[440,975],[385,890],[340,800],[315,740]];
+function sacredHit(x, y, pad = 0) {
+  if (Math.hypot(x - SACRED_FACE.x, y - SACRED_FACE.y) < SACRED_FACE.r + pad) return true;
+  let inside = false;
+  for (let i = 0, j = SACRED_BEARD.length - 1; i < SACRED_BEARD.length; j = i++) {
+    const [xi, yi] = SACRED_BEARD[i], [xj, yj] = SACRED_BEARD[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function drawSacred() {
+  cx.save();
+  cx.strokeStyle = 'rgba(255,70,70,0.5)'; cx.lineWidth = 3; cx.setLineDash([14, 10]);
+  cx.beginPath(); cx.arc(SACRED_FACE.x, SACRED_FACE.y, SACRED_FACE.r, 0, 7); cx.stroke();
+  cx.beginPath();
+  SACRED_BEARD.forEach((p, i) => i ? cx.lineTo(p[0], p[1]) : cx.moveTo(p[0], p[1]));
+  cx.closePath(); cx.stroke();
+  cx.restore();
+}
+// Ramps in top-down: a wide translucent deck whose brightness rises with height,
+// plus two rails. Height is also printed at each waypoint so a climb can be read
+// off the picture instead of inferred.
+// The funnel, drawn as what it is: a cone seen from above. Rings run from the
+// rim down to the floor so the depth is readable, and each chute is drawn at
+// its own radius with its value, so you can SEE which level you fell out of.
+function drawBowls() {
+  for (const bw of BOWLS) {
+    const g = cx.createRadialGradient(bw.x, bw.y, bw.r * 0.10, bw.x, bw.y, bw.r);
+    g.addColorStop(0, 'rgba(14,20,34,0.92)');
+    g.addColorStop(1, 'rgba(120,152,200,0.30)');
+    cx.fillStyle = g;
+    cx.beginPath(); cx.arc(bw.x, bw.y, bw.r, 0, 7); cx.fill();
+    for (let i = 1; i <= 6; i++) {
+      const rr = bw.r * i / 6;
+      const dim = bw.occupied ? 0.35 : 1;
+      cx.strokeStyle = 'rgba(190,214,255,' + (0.10 + 0.05 * i) * dim + ')';
+      cx.lineWidth = 2;
+      cx.beginPath(); cx.arc(bw.x, bw.y, rr, 0, 7); cx.stroke();
+    }
+    cx.strokeStyle = 'rgba(226,238,255,' + (bw.occupied ? 0.35 : 0.85) + ')'; cx.lineWidth = 5;
+    cx.beginPath(); cx.arc(bw.x, bw.y, bw.r, 0, 7); cx.stroke();
+    cx.textAlign = 'center'; cx.font = 'bold 19px ui-monospace,monospace';
+    for (const c of bw.chutes) {
+      cx.strokeStyle = '#ffd479'; cx.lineWidth = 4; cx.setLineDash([9, 7]);
+      cx.beginPath(); cx.arc(bw.x, bw.y, c.r, 0, 7); cx.stroke(); cx.setLineDash([]);
+      cx.fillStyle = '#ffd479';
+      cx.fillText((c.value || 0).toLocaleString(), bw.x, bw.y - c.r + 22);
+    }
+    if (bw.floor) {
+      cx.fillStyle = '#7fe8a0';
+      cx.beginPath(); cx.arc(bw.x, bw.y, bw.r * 0.14, 0, 7); cx.fill();
+      cx.fillStyle = '#0e1422'; cx.font = 'bold 16px ui-monospace,monospace';
+      cx.fillText(bw.lock ? 'LOCK' : (bw.floor.value || 0).toLocaleString(), bw.x, bw.y + 6);
+    }
+    if (bw.occupied) {
+      cx.fillStyle = 'rgba(0,0,0,0.45)';
+      cx.beginPath(); cx.arc(bw.x, bw.y + 4, BALL_R * 0.9, 0, 7); cx.fill();
+      const bg = cx.createRadialGradient(bw.x - 8, bw.y - 8, 2, bw.x, bw.y, BALL_R);
+      bg.addColorStop(0, '#ffffff'); bg.addColorStop(0.5, '#c9ced8'); bg.addColorStop(1, '#5a616d');
+      cx.fillStyle = bg; cx.beginPath(); cx.arc(bw.x, bw.y, BALL_R, 0, 7); cx.fill();
+    }
+    cx.fillStyle = bw.occupied ? 'rgba(207,228,255,0.45)' : '#cfe4ff';
+    cx.font = 'bold 21px ui-monospace,monospace';
+    cx.fillText(bw.name, bw.x, bw.y + bw.r + 30);
+    cx.textAlign = 'left';
+  }
+}
+function drawRamps() {
+  for (const r of RAMPS) {
+    const p = r.pts;
+    for (let i = 0; i + 1 < p.length; i++) {
+      const a = p[i], b2 = p[i + 1], zm = (a.z + b2.z) / 2, k = Math.min(1, zm / 80);
+      cx.strokeStyle = `rgba(${(110 + 110 * k) | 0},${(140 + 90 * k) | 0},${(185 + 60 * k) | 0},0.34)`;
+      cx.lineWidth = 52;
+      cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b2.x, b2.y); cx.stroke();
+    }
+    for (const side of [1, -1]) {
+      cx.strokeStyle = 'rgba(226,238,255,0.8)'; cx.lineWidth = 4;
+      cx.beginPath();
+      for (let i = 0; i < p.length; i++) {
+        const a = p[Math.max(0, i - 1)], b2 = p[Math.min(p.length - 1, i + 1)];
+        let dx = b2.x - a.x, dy = b2.y - a.y; const d = Math.hypot(dx, dy) || 1;
+        const px = -dy / d * 26 * side, py = dx / d * 26 * side;
+        i ? cx.lineTo(p[i].x + px, p[i].y + py) : cx.moveTo(p[i].x + px, p[i].y + py);
+      }
+      cx.stroke();
+    }
+    // mouth (capture zone) and height labels
+    const shut = r.gatedBy != null && !S.rampOpen[r.name];
+    cx.strokeStyle = shut ? '#e2685f' : '#7fe8a0'; cx.lineWidth = shut ? 5 : 3;
+    cx.setLineDash(shut ? [3, 7] : [6, 5]);
+    cx.beginPath(); cx.arc(p[0].x, p[0].y, r.mouth, 0, 7); cx.stroke(); cx.setLineDash([]);
+    cx.fillStyle = '#cfe4ff'; cx.font = 'bold 20px ui-monospace,monospace'; cx.textAlign = 'center';
+    for (const q of p) if (q.z > 0) cx.fillText('z' + Math.round(q.z), q.x, q.y - 32);
+    cx.fillStyle = shut ? '#e2685f' : '#7fe8a0';
+    cx.fillText(r.name + (shut ? ' (SHUT)' : ''), p[0].x, p[0].y + r.mouth + 24);
+    cx.textAlign = 'left';
+  }
+}
+// pixel ratio, capped: a Pixel's 2.6x on a 1080x1920 frame is 7 Mpx a frame for nothing you can see
+const DPR = () => Math.min(devicePixelRatio || 1, (typeof FX !== 'undefined' && FX.low) ? 2 : 3);
+function sizeCanvas() {
+  // visualViewport = the actually-visible area on phones (100vh lies under the URL bar)
+  const vpH = window.visualViewport ? visualViewport.height : innerHeight;
+  const vpW = window.visualViewport ? visualViewport.width : innerWidth;
+  const phone = vpW < 700;             // phone: side panel hidden, use the whole screen
+  const sideW = phone ? 0 : 280;
+  if (VIEW25) {
+    // desktop: a fixed 1080x1920 frame scaled to fit. Phone: the frame is the
+    // screen's own aspect (bars above and below the table absorb the height)
+    const wantCH = phone ? Math.max(1920, Math.min(2800, Math.round(R25.CW * vpH / vpW))) : 1920;
+    const changed = wantCH !== R25.CH || !!R25.phone !== phone;
+    R25.CH = wantCH; R25.phone = phone;
+    if (changed && R25.ready) r25relayout();
+    R25.SC = phone ? vpW / R25.CW : Math.min((vpH - 8) / R25.CH, (vpW - sideW) / R25.CW);
+    cv.width = R25.CW * R25.SC * DPR(); cv.height = R25.CH * R25.SC * DPR();
+    cv.style.width = R25.CW * R25.SC + 'px'; cv.style.height = R25.CH * R25.SC + 'px';
+    // the static canvas sits behind at the same size; its backing is (re)built by buildStaticLayer
+    cvStatic.style.display = 'block'; cvStatic.style.width = cv.style.width; cvStatic.style.height = cv.style.height;
+    stage.style.width = cv.style.width; stage.style.height = cv.style.height;
+    if (!changed && R25.ready && (cvStatic.width !== cv.width || cvStatic.height !== cv.height)) r25relayout();
+    return;
+  }
+  cvStatic.style.display = 'none';
+  SC = Math.min((vpH - 8) / GEO.H, (vpW - sideW) / GEO.W);
+  cv.width = GEO.W * SC * DPR(); cv.height = GEO.H * SC * DPR();
+  cv.style.width = GEO.W * SC + 'px'; cv.style.height = GEO.H * SC + 'px';
+  stage.style.width = cv.style.width; stage.style.height = cv.style.height;
+}
+function render() {
+  if (VIEW25 && R25.ready) {
+    // if the 2.5D pass throws, fall through to the flat view for this frame
+    // rather than take the game down --- the renderer is the new code here
+    try {
+      const k25 = R25.SC * DPR();
+      cx.setTransform(k25, 0, 0, k25, 0, 0);
+      render25();
+      return;
+    } catch (err) { console.error('render25', err); VIEW25 = false; sizeCanvas(); }
+  }
+  const k = SC * DPR();
+  cx.setTransform(k, 0, 0, k, 0, 0);
+  cx.fillStyle = '#141820'; cx.fillRect(0, 0, GEO.W, GEO.H);
+  if (SHOW_ART && ARTOK) { cx.save(); cx.globalAlpha = 0.34; cx.drawImage(ART, 0, 0, GEO.W, GEO.H); cx.restore(); }
+  drawSacred();
+  cx.lineCap = 'round'; cx.lineJoin = 'round';
+  cx.strokeStyle = '#5b6f8c'; cx.lineWidth = 7;
+  for (const s of SEGS) { cx.beginPath(); cx.moveTo(s.x1, s.y1); cx.lineTo(s.x2, s.y2); cx.stroke(); }
+  cx.fillStyle = '#c46a5a'; cx.strokeStyle = '#c46a5a'; cx.lineWidth = 8;
+  for (const w of GEO.slings) {
+    cx.beginPath(); cx.moveTo(w.pts[0][0], w.pts[0][1]);
+    for (let i = 1; i < w.pts.length; i++) cx.lineTo(w.pts[i][0], w.pts[i][1]);
+    cx.closePath(); cx.fill(); cx.stroke();
+  }
+  for (const s of DROPSEGS) {
+    if (!S.drops[s.i]) continue;
+    cx.strokeStyle = '#ffb054'; cx.lineWidth = 12;
+    cx.beginPath(); cx.moveTo(s.x1, s.y1); cx.lineTo(s.x2, s.y2); cx.stroke();
+  }
+  for (const g of GEO.guards) {
+    const a = g.rot * Math.PI / 180;
+    cx.strokeStyle = '#d8905a'; cx.lineWidth = 10;
+    cx.beginPath(); cx.moveTo(g.x - 18 * Math.cos(a), g.y - 18 * Math.sin(a));
+    cx.lineTo(g.x + 18 * Math.cos(a), g.y + 18 * Math.sin(a)); cx.stroke();
+  }
+  for (const b2 of GEO.bumpers) {
+    cx.beginPath(); cx.arc(b2.x, b2.y, b2.r, 0, 7);
+    cx.fillStyle = b2.hot ? '#ff8a5a' : '#3a4a63'; cx.fill();
+    cx.strokeStyle = '#e07070'; cx.lineWidth = 5; cx.stroke();
+  }
+  if (R.faceLit) for (let i = 0; i < GEO.eyes.length; i++) {
+    const ey = GEO.eyes[i], on = R.eyes[i];
+    const pulse = 0.55 + 0.45 * Math.sin(performance.now() / 160 + i);
+    cx.beginPath(); cx.arc(ey.x, ey.y, 40, 0, 7);
+    cx.strokeStyle = on ? '#fff1a8' : 'rgba(255,170,60,' + pulse + ')'; cx.lineWidth = on ? 7 : 5; cx.stroke();
+    cx.fillStyle = on ? 'rgba(255,220,120,0.35)' : 'rgba(255,140,40,' + (0.12 * pulse) + ')'; cx.fill();
+  }
+  if (R.mouthOpen && GEO.mouth) {
+    const mo = GEO.mouth, pulse = 0.55 + 0.45 * Math.sin(performance.now() / 120);
+    cx.beginPath(); cx.arc(mo.x, mo.y, mo.r, 0, 7);
+    cx.strokeStyle = 'rgba(248,100,4,' + pulse + ')'; cx.lineWidth = 6; cx.stroke();
+    cx.fillStyle = 'rgba(248,100,4,' + (0.15 * pulse) + ')'; cx.fill();
+  }
+  for (let i = 0; i < GEO.lanes.length; i++) {
+    const l = GEO.lanes[i];
+    cx.beginPath(); cx.arc(l.x, l.y, 22, 0, 7);
+    cx.strokeStyle = S.lanes[i] ? '#7fe8a0' : '#3f5a50'; cx.lineWidth = 5; cx.stroke();
+    if (S.lanes[i]) { cx.fillStyle = 'rgba(127,232,160,0.25)'; cx.fill(); }
+  }
+  if (GEO.saucer) {
+    cx.beginPath(); cx.arc(GEO.saucer.x, GEO.saucer.y, GEO.saucer.r, 0, 7);
+    cx.strokeStyle = S.saucerLit ? '#ffe27a' : '#5a6a58'; cx.lineWidth = 5;
+    if (S.saucerLit) { cx.fillStyle = 'rgba(255,226,122,0.2)'; cx.fill(); }
+    cx.stroke();
+  }
+  for (const f of GEO.flippers) {
+    const ang = f.side === 'L' ? S.angL : S.angR;
+    const a = (f.start + (f.endA - f.start) * ang) * Math.PI / 180;
+    cx.strokeStyle = '#f0e0c0'; cx.lineWidth = f.base * 2;
+    cx.beginPath(); cx.moveTo(f.x, f.y);
+    cx.lineTo(f.x + f.len * Math.sin(a), f.y - f.len * Math.cos(a)); cx.stroke();
+  }
+  // the plunger tip the ball rests on (greybox view: a bar; the 2.5D view draws the mechanism)
+  cx.strokeStyle = '#c8d0d8'; cx.lineWidth = 6;
+  cx.beginPath(); cx.moveTo(LANE.x0 + 3, PLUNGER.tipY); cx.lineTo(LANE.x1 - 3, PLUNGER.tipY); cx.stroke();
+  // plunger pull indicator
+  if (S.plungePull > 0) {
+    cx.fillStyle = '#ffb054';
+    cx.fillRect(GEO.W - 26, GEO.H - 300, 14, 280 * S.plungePull);
+  }
+  // raised decks: footprint tinted by height, own walls drawn brighter so the
+  // upper level reads as a separate surface rather than more playfield
+  for (const d of DECKS) {
+    const k = Math.min(1, d.z / 100);
+    cx.save();
+    cx.beginPath();
+    d.pts.forEach((p, i) => i ? cx.lineTo(p[0], p[1]) : cx.moveTo(p[0], p[1]));
+    cx.closePath();
+    cx.fillStyle = `rgba(${(90+90*k)|0},${(120+80*k)|0},${(170+60*k)|0},0.26)`;
+    cx.fill();
+    cx.strokeStyle = 'rgba(190,215,245,0.55)'; cx.lineWidth = 3; cx.setLineDash([9, 6]);
+    cx.stroke(); cx.setLineDash([]);
+    cx.strokeStyle = '#cfe4ff'; cx.lineWidth = 7;
+    for (const s of d.segs) { cx.beginPath(); cx.moveTo(s.x1, s.y1); cx.lineTo(s.x2, s.y2); cx.stroke(); }
+    for (const h of d.holes) {
+      cx.fillStyle = 'rgba(10,14,24,0.9)';
+      cx.beginPath(); cx.arc(h.x, h.y, h.r, 0, 7); cx.fill();
+      cx.strokeStyle = '#ffd479'; cx.lineWidth = 4;
+      cx.beginPath(); cx.arc(h.x, h.y, h.r, 0, 7); cx.stroke();
+    }
+    for (const p of d.pins) {
+      if (p.hot) p.hot--;
+      const g2 = cx.createRadialGradient(p.x - 3, p.y - 3, 1, p.x, p.y, p.r);
+      g2.addColorStop(0, p.hot ? '#fff6d0' : '#e8eefb');
+      g2.addColorStop(1, p.hot ? '#ffb347' : '#7d8798');
+      cx.fillStyle = g2; cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, 7); cx.fill();
+    }
+    cx.fillStyle = '#9fd8ff'; cx.font = 'bold 20px ui-monospace,monospace'; cx.textAlign = 'center';
+    const cxm = d.pts.reduce((a, p) => a + p[0], 0) / d.pts.length;
+    const cym = d.pts.reduce((a, p) => a + p[1], 0) / d.pts.length;
+    cx.fillText(d.name + '  z' + Math.round(d.z), cxm, cym);
+    cx.textAlign = 'left';
+    cx.restore();
+  }
+  drawBowls();
+  drawRamps();
+  for (const b of S.balls) {
+    // height reads as a dropped shadow plus a slightly larger, lifted ball
+    const z = b.z || 0;
+    if (z > 0.5) {
+      cx.fillStyle = 'rgba(0,0,0,0.4)';
+      cx.beginPath(); cx.arc(b.x, b.y, BALL_R * 0.85, 0, 7); cx.fill();
+    }
+    const rr = BALL_R * (1 + z / 300), by = b.y - z * 0.2;
+    const g = cx.createRadialGradient(b.x - 8, by - 8, 2, b.x, by, rr);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.5, '#c9ced8'); g.addColorStop(1, '#5a616d');
+    cx.fillStyle = g; cx.beginPath(); cx.arc(b.x, by, rr, 0, 7); cx.fill();
+  }
+  // THE STORM BREAKS: the machine turns cyan (the reserved light) — unmistakable
+  // full-field wash + a shrinking timer bar that GROWS BACK when a loop rip extends it
+  if (R.storm > 0) {
+    cx.save();
+    cx.globalCompositeOperation = 'lighter';
+    cx.fillStyle = `rgba(120,220,255,${0.05 + 0.03 * Math.sin(performance.now() / 140)})`;
+    cx.fillRect(0, 0, GEO.W, GEO.H);
+    cx.restore();
+    const bw = GEO.W - 60, frac = Math.max(0, Math.min(1, R.storm / RULES.stormMaxSecs));
+    cx.fillStyle = 'rgba(120,220,255,0.25)'; cx.fillRect(30, 108, bw, 8);
+    cx.fillStyle = '#7fe8ff'; cx.fillRect(30, 108, bw * frac, 8);
+  }
+  // HUD
+  cx.fillStyle = R.storm > 0 ? '#7fe8ff' : '#e0b95a'; cx.font = 'bold 52px ui-monospace,monospace'; cx.textAlign = 'left';
+  cx.fillText(S.score.toLocaleString(), 30, 64);
+  cx.font = '28px ui-monospace,monospace'; cx.fillStyle = '#8fa8c8';
+  cx.fillText('BALLS ' + Math.max(0, S.ballsLeft), 30, 100);
+  // trial marks: which storm marks are lit (the readout for the whole arc)
+  cx.font = '22px ui-monospace,monospace';
+  TRIAL_NAMES.forEach((name, i) => {
+    const lit = !!R.trials[i];
+    cx.fillStyle = lit ? '#ffb054' : '#4a5568';
+    cx.beginPath(); cx.arc(GEO.W - 150 + i * 50, 40, 12, 0, 7); cx.fill();
+    cx.strokeStyle = lit ? '#ffe0a0' : '#6b7a86'; cx.lineWidth = 2; cx.stroke();
+  });
+  cx.fillStyle = '#8fa8c8'; cx.textAlign = 'right';
+  cx.fillText('LOOP ' + R.loopVal.toLocaleString(), GEO.W - 30, 100);
+  if (R.storm > 0) {
+    cx.fillStyle = '#7fe8ff'; cx.font = 'bold 24px ui-monospace,monospace';
+    cx.fillText('JACKPOT ' + R.jackpot.toLocaleString(), GEO.W - 30, 130);
+  } else if (R.bonus > 0) {
+    cx.fillStyle = '#8fa8c8'; cx.font = '22px ui-monospace,monospace';
+    cx.fillText('BONUS ' + R.bonus.toLocaleString() + (R.bonusMult > 1 ? ' ' + R.bonusMult + 'X' : ''), GEO.W - 30, 130);
+  }
+  cx.textAlign = 'left';
+  if (S.msgT > 0 || S.over) {
+    cx.save();
+    // fade the last 120 frames (0.5s) so it reads as settling, not blinking off
+    cx.globalAlpha = S.over ? 1 : Math.min(1, S.msgT / 120);
+    cx.textAlign = 'center'; cx.font = 'bold 40px ui-monospace,monospace';
+    // a dark plate behind it — 40px yellow over busy cloud art was hard to read
+    const tw = cx.measureText(S.msg).width;
+    cx.fillStyle = 'rgba(8,12,22,0.72)';
+    cx.fillRect(GEO.W / 2 - tw / 2 - 22, GEO.H * 0.56 - 40, tw + 44, 56);
+    cx.fillStyle = R.storm > 0 ? '#eafcff' : '#ffe27a';
+    cx.fillText(S.msg, GEO.W / 2, GEO.H * 0.56);
+    cx.restore();
+  }
+  cx.textAlign = 'left';
+}
+
+// ---- boot ----
+const TID = new URLSearchParams(location.search).get('t') || 'S';   // web build: Thunderhead by default
+fetch('geometry-' + TID + '.json').then(r => r.json()).then(g => {
+  GEO = g;
+  GEO.oneway = GEO.oneway || []; GEO.spinners = GEO.spinners || []; GEO.eyes = GEO.eyes || [];
+  S.drops = GEO.drops.map(() => 1);
+  S.lanes = GEO.lanes.map(() => 0);
+  document.getElementById('ttitle').textContent = GEO.title || ('TABLE ' + TID);
+  document.getElementById('thelp').innerHTML = (GEO.help || []).join('<br>');
+  document.title = GEO.title || 'greybox';
+  buildColliders();
+  buildRamps();   // no-op unless the geometry defines GEO.ramps
+  buildBowls();   // no-op unless the geometry defines GEO.bowls
+  buildDecks();   // no-op unless the geometry defines GEO.decks
+  if (VIEW25) r25init();
+  sizeCanvas();
+  addEventListener('resize', sizeCanvas);
+  if (window.visualViewport) visualViewport.addEventListener('resize', sizeCanvas);
+  serve();
+  if ('ontouchstart' in window) { S.msg = 'HOLD RIGHT EDGE — RELEASE TO PLUNGE'; S.msgT = 900; }
+  requestAnimationFrame(frame);
+  musicLoad(); // async, never blocks boot --- the game runs fine if it fails
+  sfxLoad();
+});
+// self-test hook
+window.__place = (x, y, vx, vy) => { S.balls = [{ x, y, vx: vx || 0, vy: vy || 0, held: 0, z: 0, vz: 0, ramp: null, deck: null }]; };
+window.__ballDeck = () => S.balls.map(b => ({ x: Math.round(b.x), y: Math.round(b.y), z: Math.round(b.z||0),
+  deck: b.deck !== null && b.deck !== undefined ? DECKS[b.deck].name : null, onRamp: !!b.ramp }));
+window.__ballZ = () => S.balls.map(b => ({ x: +b.x.toFixed(1), y: +b.y.toFixed(1), z: +(b.z || 0).toFixed(1),
+  vz: +(b.vz || 0).toFixed(1), onRamp: !!b.ramp, s: b.ramp ? +b.ramp.s.toFixed(1) : null }));
+window.__setRamps = (arr) => { GEO.ramps = arr || []; buildRamps(); return RAMPS.length; };
+window.__state = () => ({ balls: S.balls.map(b => [Math.round(b.x), Math.round(b.y), Math.round(b.vx), Math.round(b.vy)]), score: S.score, left: S.ballsLeft, pull: +S.plungePull.toFixed(2), plunging: S.plunging, angL: +S.angL.toFixed(2), angR: +S.angR.toFixed(2), tilt: S.tilt, warn: S.nudgeWarn,
+  trials: R.trials.slice(), storm: +R.storm.toFixed(2), stormCount: R.stormCount, loopVal: R.loopVal, jackpot: R.jackpot, bonus: R.bonus, bonusMult: R.bonusMult, bonusPayout: R.bonusPayout, drops: S.drops.slice(), over: S.over, msg: S.msg });
+// test-only lever: force a bank complete without physically driving the ball through
+// every target, so the rules ARC can be soak-tested independently of ball physics
+window.__forceBank = (bank) => {
+  for (let j = 0; j < GEO.drops.length; j++) if (!GEO.drops[j].lone && (GEO.drops[j].bank || 0) === bank) S.drops[j] = 0;
+  const members = []; for (let j = 0; j < GEO.drops.length; j++) if (!GEO.drops[j].lone && (GEO.drops[j].bank || 0) === bank) members.push(j);
+  if (!R.trials[bank]) { R.trials[bank] = 1; const n = trialsLit(); flash(TRIAL_NAMES[bank] + ' LIT — ' + n + ' OF 3'); }
+  setTimeout(() => { for (const j of members) S.drops[j] = 1; }, 50);
+};
+window.__shot = async () => {
+  await fetch('/shot', { method: 'POST', body: cv.toDataURL('image/png') }).catch(() => {});
+  return [cv.width, cv.height];
+};
+</script></body></html>
